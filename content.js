@@ -334,7 +334,7 @@
       if (pageData.ytInitialData) {
         const panels = pageData.ytInitialData?.engagementPanels || [];
         const hasTranscriptPanel = panels.some(p =>
-          p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+          p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
         );
         
         if (hasTranscriptPanel) {
@@ -591,6 +591,86 @@
   // UI FUNCTIONS
   // ============================================================================
 
+  // Reset the panel when navigating to a new video
+  function resetTranscriptPanel() {
+    const panel = document.getElementById('yt-transcript-panel');
+    if (!panel) return;
+    
+    console.log('Resetting transcript panel for new video');
+    
+    // Clear data
+    transcriptData = [];
+    currentSearchTerm = '';
+    
+    // Reset UI
+    const button = document.getElementById('load-transcript-btn');
+    const searchContainer = document.getElementById('search-container');
+    const container = document.getElementById('transcript-content');
+    
+    if (button) {
+      button.style.display = 'block';
+      button.disabled = false;
+      button.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+        </svg>
+        Load Transcript
+      `;
+    }
+    
+    if (searchContainer) {
+      searchContainer.style.display = 'none';
+      const searchInput = document.getElementById('transcript-search');
+      if (searchInput) searchInput.value = '';
+    }
+    
+    if (container) {
+      container.innerHTML = `
+        <div class="transcript-instructions">
+          <p>📝 Click "Load Transcript" to fetch the video captions</p>
+          <p class="transcript-tip">💡 Tip: Subtitles will be enabled automatically if needed</p>
+        </div>
+      `;
+    }
+  }
+
+  // Copy transcript to clipboard
+  async function copyTranscriptToClipboard() {
+    if (!transcriptData || transcriptData.length === 0) {
+      return;
+    }
+    
+    try {
+      const text = transcriptData.map(entry => {
+        const timestamp = formatTime(entry.start);
+        return `[${timestamp}] ${entry.text}`;
+      }).join('\n\n');
+      
+      await navigator.clipboard.writeText(text);
+      
+      // Show feedback
+      const copyBtn = document.getElementById('copy-transcript-btn');
+      if (copyBtn) {
+        const originalHTML = copyBtn.innerHTML;
+        copyBtn.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M13.5 2l-7.5 7.5-3.5-3.5-1.5 1.5 5 5 9-9z"/>
+          </svg>
+          Copied!
+        `;
+        copyBtn.disabled = true;
+        
+        setTimeout(() => {
+          copyBtn.innerHTML = originalHTML;
+          copyBtn.disabled = false;
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Failed to copy transcript:', error);
+      showError('Failed to copy transcript to clipboard');
+    }
+  }
+
   // Inject the transcript panel
   async function injectTranscriptPanel() {
     if (document.getElementById('yt-transcript-panel')) {
@@ -619,6 +699,13 @@
                 <input type="checkbox" id="preserve-formatting" style="cursor: pointer;">
                 Preserve text formatting
               </label>
+              <button id="copy-transcript-btn" class="copy-transcript-btn">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2zm0 1a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V4a1 1 0 00-1-1H4z"/>
+                  <path d="M11 7h3v7a2 2 0 01-2 2H5v-1h7a1 1 0 001-1V7z" opacity="0.6"/>
+                </svg>
+                Copy All
+              </button>
               <select id="subtitle-language" style="display: none; margin-top: 8px; padding: 6px; background: var(--yt-spec-badge-chip-background); color: var(--yt-spec-text-primary); border: 1px solid var(--yt-spec-10-percent-layer); border-radius: 4px; cursor: pointer;">
               </select>
             </div>
@@ -636,6 +723,7 @@
 
       document.getElementById('load-transcript-btn').addEventListener('click', handleLoadTranscript);
       document.getElementById('transcript-search').addEventListener('input', handleSearch);
+      document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
       document.getElementById('preserve-formatting').addEventListener('change', (e) => {
         preserveFormatting = e.target.checked;
         if (transcriptData.length > 0) {
@@ -660,111 +748,91 @@
     }
   }
 
-  // Handle load transcript button click
+  // Handle load transcript button
   async function handleLoadTranscript(languageCode = null) {
     const button = document.getElementById('load-transcript-btn');
     const searchContainer = document.getElementById('search-container');
-    const container = document.getElementById('transcript-content');
     
     button.disabled = true;
     button.innerHTML = `
       <svg class="spinning" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z" opacity="0.3"/>
-        <path d="M8 2v2a4 4 0 014 4h2a6 6 0 00-6-6z"/>
+        <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12z" opacity="0.3"/>
+        <path d="M8 0a8 8 0 000 16V14a6 6 0 010-12V0z"/>
       </svg>
       Loading...
     `;
-    container.innerHTML = '<div class="loading">Fetching transcript...</div>';
     
-    try {
-      await fetchTranscript(languageCode);
-      
-      button.style.display = 'none';
-      searchContainer.style.display = 'block';
-      
-    } catch (error) {
-      console.error('Error loading transcript:', error);
-      button.disabled = false;
-      button.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
-        </svg>
-        Load Transcript
-      `;
-      showError(error.message || 'Failed to load transcript');
-    }
+    await fetchTranscript(languageCode);
+    
+    button.style.display = 'none';
+    searchContainer.style.display = 'block';
   }
 
-  // Display transcript
+  // Display transcript in panel
   function displayTranscript(data) {
     const container = document.getElementById('transcript-content');
     if (!container) return;
-    
+
     if (!data || data.length === 0) {
-      container.innerHTML = '<div class="no-results">No transcript available</div>';
+      container.innerHTML = '<div class="error">No transcript entries found</div>';
       return;
     }
-    
-    container.innerHTML = '';
-    
-    data.forEach((entry, index) => {
-      const entryDiv = document.createElement('div');
-      entryDiv.className = 'transcript-entry';
-      entryDiv.dataset.index = index;
-      
-      const timestamp = document.createElement('span');
-      timestamp.className = 'timestamp';
-      timestamp.textContent = formatTime(entry.start);
-      timestamp.addEventListener('click', () => seekToTime(entry.start));
-      
-      const text = document.createElement('span');
-      text.className = 'transcript-text';
-      text.textContent = entry.text;
-      
-      entryDiv.appendChild(timestamp);
-      entryDiv.appendChild(text);
-      container.appendChild(entryDiv);
+
+    container.innerHTML = data.map((entry, index) => `
+      <div class="transcript-entry" data-start="${entry.start}">
+        <span class="timestamp">${formatTime(entry.start)}</span>
+        <span class="transcript-text">${entry.text}</span>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.transcript-entry').forEach(entry => {
+      entry.addEventListener('click', () => {
+        const startTime = parseFloat(entry.dataset.start);
+        seekToTime(startTime);
+      });
     });
   }
 
-  // Handle search
-  function handleSearch(event) {
-    currentSearchTerm = event.target.value.toLowerCase();
-    const entries = document.querySelectorAll('.transcript-entry');
-    
-    if (!currentSearchTerm) {
-      entries.forEach(entry => {
-        entry.style.display = 'flex';
-        const textSpan = entry.querySelector('.transcript-text');
-        const originalText = transcriptData[entry.dataset.index].text;
-        textSpan.innerHTML = originalText;
-      });
+  // Handle search input
+  function handleSearch(e) {
+    const searchTerm = e.target.value.toLowerCase().trim();
+    currentSearchTerm = searchTerm;
+
+    if (!searchTerm) {
+      displayTranscript(transcriptData);
       return;
     }
-    
-    const searchRegex = new RegExp(`(${escapeRegex(currentSearchTerm)})`, 'gi');
-    let hasResults = false;
-    
-    entries.forEach(entry => {
-      const textSpan = entry.querySelector('.transcript-text');
-      const originalText = transcriptData[entry.dataset.index].text;
-      
-      if (originalText.toLowerCase().includes(currentSearchTerm)) {
-        entry.style.display = 'flex';
-        textSpan.innerHTML = originalText.replace(searchRegex, '<mark>$1</mark>');
-        hasResults = true;
-      } else {
-        entry.style.display = 'none';
-      }
-    });
-    
-    if (!hasResults) {
+
+    const filtered = transcriptData.filter(entry => 
+      entry.text.toLowerCase().includes(searchTerm)
+    );
+
+    if (filtered.length === 0) {
       const container = document.getElementById('transcript-content');
-      const noResults = document.createElement('div');
-      noResults.className = 'no-results';
-      noResults.textContent = 'No results found';
-      container.appendChild(noResults);
+      container.innerHTML = '<div class="no-results">No results found</div>';
+      return;
     }
+
+    const container = document.getElementById('transcript-content');
+    const escapedSearch = escapeRegex(searchTerm);
+    const regex = new RegExp(`(${escapedSearch})`, 'gi');
+
+    container.innerHTML = filtered.map(entry => {
+      const highlightedText = entry.text.replace(regex, '<mark>$1</mark>');
+      return `
+        <div class="transcript-entry" data-start="${entry.start}">
+          <span class="timestamp">${formatTime(entry.start)}</span>
+          <span class="transcript-text">${highlightedText}</span>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.transcript-entry').forEach(entry => {
+      entry.addEventListener('click', () => {
+        const startTime = parseFloat(entry.dataset.start);
+        seekToTime(startTime);
+      });
+    });
   }
 
   // Show error message
@@ -773,41 +841,78 @@
     if (container) {
       container.innerHTML = `<div class="error">${message}</div>`;
     }
+    
+    const button = document.getElementById('load-transcript-btn');
+    if (button) {
+      button.style.display = 'block';
+      button.disabled = false;
+      button.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+        </svg>
+        Load Transcript
+      `;
+    }
+  }
+
+  // ============================================================================
+  // NAVIGATION DETECTION
+  // ============================================================================
+
+  // Watch for navigation changes (YouTube SPA)
+  function watchForNavigation() {
+    let lastUrl = location.href;
+    
+    const checkUrlChange = () => {
+      const currentUrl = location.href;
+      if (currentUrl !== lastUrl) {
+        console.log('URL changed from', lastUrl, 'to', currentUrl);
+        lastUrl = currentUrl;
+        
+        if (currentUrl.includes('/watch')) {
+          console.log('Navigated to watch page');
+          setTimeout(() => {
+            init();
+          }, 1000);
+        }
+      }
+    };
+    
+    // Use MutationObserver to detect DOM changes (YouTube's SPA navigation)
+    const observer = new MutationObserver(checkUrlChange);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+    
+    // Also check on popstate (browser back/forward)
+    window.addEventListener('popstate', checkUrlChange);
+    
+    return observer;
   }
 
   // ============================================================================
   // INITIALIZATION
   // ============================================================================
 
-  function init() {
+  async function init() {
     if (window.location.href.includes('/watch')) {
       injectFetchHandler();
-      injectTranscriptPanel();
+      await injectTranscriptPanel();
+      resetTranscriptPanel(); // Reset panel when navigating to new video
     }
   }
 
-  // Listen for YouTube navigation (SPA)
-  let lastUrl = location.href;
-  
-  if (observerInstance) {
-    observerInstance.disconnect();
-  }
-  
-  observerInstance = new MutationObserver(() => {
-    const url = location.href;
-    if (url !== lastUrl) {
-      lastUrl = url;
-      console.log('URL changed to:', url);
-      init();
-    }
-  });
-  
-  observerInstance.observe(document, { subtree: true, childList: true });
-
-  // Initialize
+  // Run on load
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', () => {
+      init();
+      observerInstance = watchForNavigation();
+    });
   } else {
     init();
+    observerInstance = watchForNavigation();
   }
+
+  console.log('✓ YouTube Transcript Search extension loaded');
 })();
