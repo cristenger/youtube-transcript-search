@@ -245,7 +245,219 @@
     select.style.display = 'block';
   }
 
-  // Fetch transcript using YouTube's internal API (mejorado con page context)
+  // Get transcript URL from YouTube's player API (VERSIÓN MEJORADA CON EXTRACCIÓN DIRECTA)
+  async function getTranscriptUrl(videoId, languageCode = null) {
+    console.log('Looking for caption tracks...');
+    
+    // Primero intentar obtener datos directamente del reproductor
+    try {
+      const captionsData = await extractCaptionsFromPlayer();
+      if (captionsData && captionsData.length > 0) {
+        console.log('✓ Found captions directly from player:', captionsData.length, 'entries');
+        return captionsData; // Retornar directamente los datos en lugar de URL
+      }
+    } catch (error) {
+      console.warn('Failed to extract captions from player:', error);
+    }
+    
+    // Si no funcionó, intentar con la URL tradicional
+    let captionTracks = []; // Changed: moved here and initialized
+    
+    // Método 1: Intentar obtener directamente del reproductor (NUEVO)
+    try {
+      const player = document.getElementById('movie_player');
+      if (player && typeof player.getOption === 'function') {
+        const tracks = player.getOption('captions', 'tracklist');
+        if (tracks && tracks.length > 0) {
+          console.log('✓ Found caption tracks from player API:', tracks.length);
+          
+          let selectedTrack = null;
+          if (languageCode) {
+            selectedTrack = tracks.find(t => t.languageCode === languageCode);
+          }
+          if (!selectedTrack) {
+            selectedTrack = tracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en'));
+          }
+          if (!selectedTrack) {
+            selectedTrack = tracks[0];
+          }
+          
+          if (selectedTrack && selectedTrack.baseUrl) {
+            console.log('✓ Selected track from player:', selectedTrack.languageName);
+            return selectedTrack.baseUrl;
+          }
+        }
+      }
+    } catch (error) {
+      console.log('Player API method failed:', error);
+    }
+    
+    // Método 2: ytInitialPlayerResponse (más rápido y confiable)
+    if (typeof ytInitialPlayerResponse !== 'undefined') {
+      const playabilityStatus = ytInitialPlayerResponse.playabilityStatus;
+      
+      // Verificar estado del video
+      if (playabilityStatus && playabilityStatus.status !== 'OK') {
+        const reason = playabilityStatus.reason || 'Unknown reason';
+        
+        if (playabilityStatus.status === 'LOGIN_REQUIRED') {
+          if (reason.includes('not a bot')) {
+            throw new IpBlocked(videoId);
+          }
+          if (reason.includes('inappropriate') || reason.includes('age')) {
+            throw new AgeRestricted(videoId);
+          }
+        }
+        
+        if (playabilityStatus.status === 'ERROR') {
+          throw new VideoUnavailable(videoId);
+        }
+        
+        if (playabilityStatus.status === 'UNPLAYABLE') {
+          throw new VideoUnavailable(videoId);
+        }
+      }
+      
+      // Buscar caption tracks
+      if (ytInitialPlayerResponse.captions &&
+          ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer &&
+          ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks) {
+        captionTracks = ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+        console.log('✓ Found caption tracks from ytInitialPlayerResponse:', captionTracks.length);
+        
+        if (captionTracks.length > 0) {
+          let track = null;
+          if (languageCode) {
+            track = captionTracks.find(t => t.languageCode === languageCode);
+          }
+          if (!track) {
+            track = captionTracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || captionTracks[0];
+          }
+          console.log('✓ Selected track:', track);
+          return track.baseUrl;
+        }
+      }
+    }
+
+    // Método 3: Extraer de scripts
+    console.log('Trying to extract from script tags...');
+    const scripts = document.querySelectorAll('script');
+    // Removed: let captionTracks = null; (variable already declared above)
+
+    for (let script of scripts) {
+      const content = script.textContent;
+      if (content.includes('captionTracks')) {
+        // Varios métodos de extracción como antes
+        const rendererMatch = content.match(/"playerCaptionsTracklistRenderer":\s*({[^}]*"captionTracks"[^}]*})/);
+        if (rendererMatch) {
+          try {
+            const renderer = JSON.parse(rendererMatch[1]);
+            if (renderer.captionTracks && renderer.captionTracks.length > 0) {
+              captionTracks = renderer.captionTracks;
+              console.log('✓ Found caption tracks from full renderer:', captionTracks);
+              break;
+            }
+          } catch (e) {
+            console.log('Failed to parse full renderer');
+          }
+        }
+        
+        if (!captionTracks || captionTracks.length === 0) { // Changed: added check
+          const captionsMatch = content.match(/"captions":([^}]+})/);
+          if (captionsMatch) {
+            try {
+              let captionsText = captionsMatch[0];
+              const videoDetailsIndex = content.indexOf(',"videoDetails', captionsMatch.index);
+              if (videoDetailsIndex > captionsMatch.index) {
+                captionsText = content.substring(captionsMatch.index, videoDetailsIndex);
+              }
+              
+              const captionsData = JSON.parse('{' + captionsText + '}');
+              if (captionsData.captions && captionsData.captions.playerCaptionsTracklistRenderer) {
+                captionTracks = captionsData.captions.playerCaptionsTracklistRenderer.captionTracks;
+                console.log('✓ Found caption tracks from captions split:', captionTracks);
+                break;
+              }
+            } catch (e) {
+              console.log('Failed to parse captions split');
+            }
+          }
+        }
+        
+        if (!captionTracks || captionTracks.length === 0) { // Changed: added check
+          const patterns = [
+            /"captionTracks":\s*(\[[^\]]+\])/,
+            /"captionTracks":(\[{[^}]+}\])/,
+          ];
+          
+          for (let pattern of patterns) {
+            const match = content.match(pattern);
+            if (match) {
+              try {
+                captionTracks = JSON.parse(match[1]);
+                if (captionTracks && captionTracks.length > 0) {
+                  console.log('✓ Found caption tracks with pattern:', captionTracks);
+                  break;
+                }
+              } catch (e) {
+                console.log('Failed to parse with pattern:', pattern);
+              }
+            }
+          }
+        }
+        
+        if (captionTracks && captionTracks.length > 0) break;
+      }
+    }
+
+    // Verificar si encontramos captions
+    if (!captionTracks || captionTracks.length === 0) {
+      console.log('✗ No caption tracks found in any method');
+      throw new TranscriptsDisabled(videoId);
+    }
+
+    // Seleccionar track preferido
+    let track = null;
+    if (languageCode) {
+      track = captionTracks.find(t => t.languageCode === languageCode);
+    }
+    if (!track) {
+      track = captionTracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || captionTracks[0];
+    }
+    console.log('✓ Selected track:', track);
+    return track.baseUrl;
+  }
+
+  // Nueva función: Extraer captions directamente del reproductor de YouTube
+  async function extractCaptionsFromPlayer() {
+    return new Promise((resolve, reject) => {
+      const eventId = 'extractCaptions_' + Date.now() + '_' + Math.random();
+      
+      const responseHandler = (event) => {
+        if (event.detail && event.detail.eventId === eventId) {
+          window.removeEventListener('captionsExtractResponse', responseHandler);
+          if (event.detail.success) {
+            resolve(event.detail.data);
+          } else {
+            reject(new Error(event.detail.error || 'Extraction failed'));
+          }
+        }
+      };
+      
+      window.addEventListener('captionsExtractResponse', responseHandler);
+      
+      window.dispatchEvent(new CustomEvent('captionsExtractRequest', {
+        detail: { eventId }
+      }));
+      
+      setTimeout(() => {
+        window.removeEventListener('captionsExtractResponse', responseHandler);
+        reject(new Error('Extraction timeout'));
+      }, 5000);
+    });
+  }
+
+  // Fetch transcript using YouTube's internal API (mejorado con datos directos)
   async function fetchTranscript(languageCode = null) {
     try {
       const videoId = getVideoId();
@@ -256,44 +468,49 @@
 
       console.log('Fetching transcript for video:', videoId, 'language:', languageCode || 'auto');
 
-      const transcriptUrl = await getTranscriptUrl(videoId, languageCode);
+      const result = await getTranscriptUrl(videoId, languageCode);
+      
+      // Si result es un array, son los datos directos
+      if (Array.isArray(result)) {
+        transcriptData = result;
+        console.log(`✓ Loaded transcript directly from player, entries: ${transcriptData.length}`);
+        displayTranscript(transcriptData);
+        return;
+      }
+      
+      // Si no, es una URL y seguimos con el método anterior
+      const transcriptUrl = result;
       if (!transcriptUrl) {
         showError('No transcript available for this video.<br><br>💡 Make sure captions are available for this video.<br>Some videos may not have captions.');
         return;
       }
 
       console.log('Fetching from URL:', transcriptUrl);
+      console.log('Trying XMLHttpRequest in page context...');
       
-      // Try fetching via page context using XMLHttpRequest (bypasses extension CORS)
-      try {
-        console.log('Trying XMLHttpRequest in page context...');
-        const data = await fetchViaPageContext(transcriptUrl);
+      const data = await fetchViaPageContext(transcriptUrl);
+      
+      if (data && data.length > 0) {
+        console.log('✓ Received data via page context:', data.length, 'bytes');
         
-        if (data && data.length > 0) {
-          console.log('✓ Received data via page context:', data.length, 'bytes');
-          
-          // Try parsing with different formats
-          const parsers = [
-            { name: 'XML', fn: parseTranscriptXML },
-            { name: 'JSON', fn: parseTranscriptJSON },
-            { name: 'VTT', fn: parseTranscriptVTT }
-          ];
-          
-          for (const parser of parsers) {
-            try {
-              transcriptData = parser.fn(data);
-              if (transcriptData.length > 0) {
-                console.log(`✓ Successfully parsed with ${parser.name}, entries: ${transcriptData.length}`);
-                displayTranscript(transcriptData);
-                return;
-              }
-            } catch (e) {
-              console.warn(`Failed to parse as ${parser.name}:`, e);
+        const parsers = [
+          { name: 'XML', fn: parseTranscriptXML },
+          { name: 'JSON', fn: parseTranscriptJSON },
+          { name: 'VTT', fn: parseTranscriptVTT }
+        ];
+        
+        for (const parser of parsers) {
+          try {
+            transcriptData = parser.fn(data);
+            if (transcriptData.length > 0) {
+              console.log(`✓ Successfully parsed with ${parser.name}, entries: ${transcriptData.length}`);
+              displayTranscript(transcriptData);
+              return;
             }
+          } catch (e) {
+            console.warn(`Failed to parse as ${parser.name}:`, e);
           }
         }
-      } catch (error) {
-        console.warn('Page context fetch failed:', error);
       }
       
       showError('Unable to fetch transcript data from YouTube.<br><br>The transcript API returned empty data.<br>This video may have restricted captions.');
@@ -385,183 +602,6 @@
 
   // Constantes mejoradas
   const RE_XML_TRANSCRIPT = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
-
-  // Get transcript URL from YouTube's player API (VERSIÓN MEJORADA)
-  async function getTranscriptUrl(videoId, languageCode = null) {
-    try {
-      console.log('Looking for caption tracks...');
-      
-      // Método 1: Intentar obtener directamente del reproductor (NUEVO)
-      try {
-        const player = document.getElementById('movie_player');
-        if (player && typeof player.getOption === 'function') {
-          const tracks = player.getOption('captions', 'tracklist');
-          if (tracks && tracks.length > 0) {
-            console.log('✓ Found caption tracks from player API:', tracks.length);
-            
-            let selectedTrack = null;
-            if (languageCode) {
-              selectedTrack = tracks.find(t => t.languageCode === languageCode);
-            }
-            if (!selectedTrack) {
-              selectedTrack = tracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en'));
-            }
-            if (!selectedTrack) {
-              selectedTrack = tracks[0];
-            }
-            
-            if (selectedTrack && selectedTrack.baseUrl) {
-              console.log('✓ Selected track from player:', selectedTrack.languageName);
-              return selectedTrack.baseUrl;
-            }
-          }
-        }
-      } catch (error) {
-        console.log('Player API method failed:', error);
-      }
-      
-      // Método 2: ytInitialPlayerResponse (más rápido y confiable)
-      if (typeof ytInitialPlayerResponse !== 'undefined') {
-        const playabilityStatus = ytInitialPlayerResponse.playabilityStatus;
-        
-        // Verificar estado del video
-        if (playabilityStatus && playabilityStatus.status !== 'OK') {
-          const reason = playabilityStatus.reason || 'Unknown reason';
-          
-          if (playabilityStatus.status === 'LOGIN_REQUIRED') {
-            if (reason.includes('not a bot')) {
-              throw new IpBlocked(videoId);
-            }
-            if (reason.includes('inappropriate') || reason.includes('age')) {
-              throw new AgeRestricted(videoId);
-            }
-          }
-          
-          if (playabilityStatus.status === 'ERROR') {
-            throw new VideoUnavailable(videoId);
-          }
-          
-          if (playabilityStatus.status === 'UNPLAYABLE') {
-            throw new VideoUnavailable(videoId);
-          }
-        }
-        
-        // Buscar caption tracks
-        if (ytInitialPlayerResponse.captions &&
-            ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer &&
-            ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks) {
-          const captionTracks = ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
-          console.log('✓ Found caption tracks from ytInitialPlayerResponse:', captionTracks.length);
-          
-          if (captionTracks.length > 0) {
-            let track = null;
-            if (languageCode) {
-              track = captionTracks.find(t => t.languageCode === languageCode);
-            }
-            if (!track) {
-              track = captionTracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || captionTracks[0];
-            }
-            console.log('✓ Selected track:', track);
-            return track.baseUrl;
-          }
-        }
-      }
-
-      // Método 3: Extraer de scripts
-      console.log('Trying to extract from script tags...');
-      const scripts = document.querySelectorAll('script');
-      let captionTracks = null;
-
-      for (let script of scripts) {
-        const content = script.textContent;
-        if (content.includes('captionTracks')) {
-          // Varios métodos de extracción como antes
-          const rendererMatch = content.match(/"playerCaptionsTracklistRenderer":\s*({[^}]*"captionTracks"[^}]*})/);
-          if (rendererMatch) {
-            try {
-              const renderer = JSON.parse(rendererMatch[1]);
-              if (renderer.captionTracks && renderer.captionTracks.length > 0) {
-                captionTracks = renderer.captionTracks;
-                console.log('✓ Found caption tracks from full renderer:', captionTracks);
-                break;
-              }
-            } catch (e) {
-              console.log('Failed to parse full renderer');
-            }
-          }
-          
-          if (!captionTracks) {
-            const captionsMatch = content.match(/"captions":([^}]+})/);
-            if (captionsMatch) {
-              try {
-                let captionsText = captionsMatch[0];
-                const videoDetailsIndex = content.indexOf(',"videoDetails', captionsMatch.index);
-                if (videoDetailsIndex > captionsMatch.index) {
-                  captionsText = content.substring(captionsMatch.index, videoDetailsIndex);
-                }
-                
-                const captionsData = JSON.parse('{' + captionsText + '}');
-                if (captionsData.captions && captionsData.captions.playerCaptionsTracklistRenderer) {
-                  captionTracks = captionsData.captions.playerCaptionsTracklistRenderer.captionTracks;
-                  console.log('✓ Found caption tracks from captions split:', captionTracks);
-                  break;
-                }
-              } catch (e) {
-                console.log('Failed to parse captions split');
-              }
-            }
-          }
-          
-          if (!captionTracks) {
-            const patterns = [
-              /"captionTracks":\s*(\[[^\]]+\])/,
-              /"captionTracks":(\[{[^}]+}\])/,
-            ];
-            
-            for (let pattern of patterns) {
-              const match = content.match(pattern);
-              if (match) {
-                try {
-                  captionTracks = JSON.parse(match[1]);
-                  if (captionTracks && captionTracks.length > 0) {
-                    console.log('✓ Found caption tracks with pattern:', captionTracks);
-                    break;
-                  }
-                } catch (e) {
-                  console.log('Failed to parse with pattern:', pattern);
-                }
-              }
-            }
-          }
-          
-          if (captionTracks && captionTracks.length > 0) break;
-        }
-      }
-
-      // Verificar si encontramos captions
-      if (!captionTracks || captionTracks.length === 0) {
-        console.log('✗ No caption tracks found in any method');
-        throw new TranscriptsDisabled(videoId);
-      }
-
-      // Seleccionar track preferido
-      let track = null;
-      if (languageCode) {
-        track = captionTracks.find(t => t.languageCode === languageCode);
-      }
-      if (!track) {
-        track = captionTracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || captionTracks[0];
-      }
-      console.log('✓ Selected track:', track);
-      return track.baseUrl;
-    } catch (error) {
-      if (error instanceof TranscriptError) {
-        throw error;
-      }
-      console.error('Error getting transcript URL:', error);
-      throw error;
-    }
-  }
 
   // Parse JSON transcript format
   function parseTranscriptJSON(jsonText) {
