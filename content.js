@@ -245,7 +245,7 @@
     select.style.display = 'block';
   }
 
-  // Fetch transcript using YouTube's internal API (mejorado)
+  // Fetch transcript using YouTube's internal API (mejorado con page context)
   async function fetchTranscript(languageCode = null) {
     try {
       const videoId = getVideoId();
@@ -264,48 +264,39 @@
 
       console.log('Fetching from URL:', transcriptUrl);
       
-      // Estrategias mejoradas de fetch
-      const fetchStrategies = [
-        { fmt: 'srv3', parser: parseTranscriptXML, name: 'XML (srv3)' },
-        { fmt: 'json3', parser: parseTranscriptJSON, name: 'JSON (json3)' },
-        { fmt: 'vtt', parser: parseTranscriptVTT, name: 'WebVTT' },
-        { fmt: null, parser: parseTranscriptXML, name: 'XML (default)' },
-      ];
-      
-      for (const strategy of fetchStrategies) {
-        try {
-          const url = strategy.fmt 
-            ? `${transcriptUrl}&fmt=${strategy.fmt}`
-            : transcriptUrl;
+      // Try fetching via page context using XMLHttpRequest (bypasses extension CORS)
+      try {
+        console.log('Trying XMLHttpRequest in page context...');
+        const data = await fetchViaPageContext(transcriptUrl);
+        
+        if (data && data.length > 0) {
+          console.log('✓ Received data via page context:', data.length, 'bytes');
           
-          console.log(`Trying strategy: ${strategy.name}`);
+          // Try parsing with different formats
+          const parsers = [
+            { name: 'XML', fn: parseTranscriptXML },
+            { name: 'JSON', fn: parseTranscriptJSON },
+            { name: 'VTT', fn: parseTranscriptVTT }
+          ];
           
-          const response = await fetch(url, {
-            method: 'GET',
-            credentials: 'include',
-            headers: {
-              'Accept': 'application/xml, text/xml, application/json, text/vtt, */*',
-              'Accept-Language': 'en-US',
-            }
-          });
-          
-          if (response.ok) {
-            const text = await response.text();
-            if (text && text.trim().length > 0) {
-              transcriptData = strategy.parser(text);
+          for (const parser of parsers) {
+            try {
+              transcriptData = parser.fn(data);
               if (transcriptData.length > 0) {
-                console.log(`✓ Successfully fetched with ${strategy.name}, entries: ${transcriptData.length}`);
+                console.log(`✓ Successfully parsed with ${parser.name}, entries: ${transcriptData.length}`);
                 displayTranscript(transcriptData);
                 return;
               }
+            } catch (e) {
+              console.warn(`Failed to parse as ${parser.name}:`, e);
             }
           }
-        } catch (error) {
-          console.warn(`✗ Failed with strategy ${strategy.name}:`, error);
         }
+      } catch (error) {
+        console.warn('Page context fetch failed:', error);
       }
       
-      showError('Unable to fetch transcript data from YouTube.<br><br>All fetch strategies failed.<br>Try enabling subtitles manually first.');
+      showError('Unable to fetch transcript data from YouTube.<br><br>The transcript API returned empty data.<br>This video may have restricted captions.');
     } catch (error) {
       console.error('Error fetching transcript:', error);
       if (error instanceof TranscriptError) {
@@ -313,6 +304,76 @@
       } else {
         showError('Failed to load transcript: ' + error.message);
       }
+    }
+  }
+
+  // Nueva función: Fetch via page context to bypass CORS (with better error handling)
+  function fetchViaPageContext(url) {
+    return new Promise((resolve, reject) => {
+      const eventId = 'transcriptFetch_' + Date.now() + '_' + Math.random();
+      
+      console.log('Setting up fetch with eventId:', eventId);
+      
+      // Listen for response
+      const responseHandler = (event) => {
+        if (event.detail && event.detail.eventId === eventId) {
+          console.log('Received response for eventId:', eventId, event.detail);
+          window.removeEventListener('transcriptFetchResponse', responseHandler);
+          if (event.detail.success) {
+            resolve(event.detail.data);
+          } else {
+            reject(new Error(event.detail.error || 'Fetch failed'));
+          }
+        }
+      };
+      
+      window.addEventListener('transcriptFetchResponse', responseHandler);
+      
+      // Dispatch request event
+      console.log('Dispatching fetch request for URL:', url);
+      window.dispatchEvent(new CustomEvent('transcriptFetchRequest', {
+        detail: { url, eventId }
+      }));
+      
+      // Check if page script is loaded after a short delay
+      setTimeout(() => {
+        if (!window.__transcriptPageScriptLoaded) {
+          console.error('Page script not loaded! The page-script.js may not have been injected properly.');
+        }
+      }, 1000);
+      
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        window.removeEventListener('transcriptFetchResponse', responseHandler);
+        reject(new Error('Fetch timeout - page script may not be responding'));
+      }, 10000);
+    });
+  }
+
+  // Inject fetch handler into page context (with better error handling)
+  function injectFetchHandler() {
+    if (window.__transcriptFetchHandlerInjected) {
+      console.log('Fetch handler already injected');
+      return;
+    }
+    window.__transcriptFetchHandlerInjected = true;
+    
+    console.log('Injecting page-script.js...');
+    const script = document.createElement('script');
+    
+    try {
+      script.src = chrome.runtime.getURL('page-script.js');
+      script.onload = function() {
+        console.log('✓ page-script.js loaded successfully');
+        this.remove();
+      };
+      script.onerror = function(error) {
+        console.error('✗ Failed to load page-script.js:', error);
+        console.error('Make sure page-script.js exists in the extension folder');
+      };
+      (document.head || document.documentElement).appendChild(script);
+    } catch (error) {
+      console.error('Error injecting page-script.js:', error);
     }
   }
 
@@ -828,8 +889,12 @@
 
   // Initialize
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', () => {
+      injectFetchHandler();
+      init();
+    });
   } else {
+    injectFetchHandler();
     init();
   }
 })();
