@@ -8,6 +8,39 @@
   // Signal that the script is loaded
   window.__transcriptPageScriptLoaded = true;
   
+  // Listen for data extraction requests
+  window.addEventListener('dataExtractRequest', (event) => {
+    console.log('Page script received data extraction request');
+    const { eventId } = event.detail;
+    
+    try {
+      const data = {
+        ytInitialData: typeof ytInitialData !== 'undefined' ? ytInitialData : null,
+        ytInitialPlayerResponse: typeof ytInitialPlayerResponse !== 'undefined' ? ytInitialPlayerResponse : null
+      };
+      
+      console.log('Extracted data:', {
+        hasYtInitialData: !!data.ytInitialData,
+        hasYtInitialPlayerResponse: !!data.ytInitialPlayerResponse
+      });
+      
+      window.dispatchEvent(new CustomEvent('dataExtractResponse', {
+        detail: {
+          eventId,
+          data: data
+        }
+      }));
+    } catch (error) {
+      console.error('Error extracting data:', error);
+      window.dispatchEvent(new CustomEvent('dataExtractResponse', {
+        detail: {
+          eventId,
+          data: {}
+        }
+      }));
+    }
+  });
+  
   // Listen for caption extraction requests
   window.addEventListener('captionsExtractRequest', async (event) => {
     console.log('Page script received caption extraction request:', event.detail);
@@ -72,7 +105,14 @@
         console.log('Track', i, ':', track.kind, track.label, track.language, track.mode);
         
         if (track.kind === 'subtitles' || track.kind === 'captions') {
-          if (track.mode === 'showing' || track.language === 'en' || !activeTrack) {
+          if (track.mode === 'showing') {
+            activeTrack = track;
+            break;
+          }
+          if (!activeTrack && (track.language === 'en' || track.language.startsWith('en'))) {
+            activeTrack = track;
+          }
+          if (!activeTrack) {
             activeTrack = track;
           }
         }
@@ -126,8 +166,13 @@
       const xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       
+      // Add necessary headers
+      xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
+      xhr.responseType = 'text';
+      
       xhr.onload = function() {
-        console.log('XHR loaded, status:', xhr.status, 'response length:', xhr.responseText.length);
+        console.log('XHR loaded, status:', xhr.status, 'response length:', xhr.responseText?.length || 0);
+        
         if (xhr.status === 200) {
           window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
             detail: {
