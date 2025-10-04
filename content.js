@@ -71,16 +71,11 @@
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 
-  // Reutilizar textarea
-  let _decodeTextarea = null;
-
+  // Decode HTML entities
   function decodeHTMLEntities(text) {
-    if (!_decodeTextarea) {
-      _decodeTextarea = document.createElement('textarea');
-    }
-    
-    _decodeTextarea.innerHTML = text;
-    let decoded = _decodeTextarea.value;
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    let decoded = textarea.value;
     
     decoded = decoded.replace(/\n/g, ' ').replace(/\s+/g, ' ');
     
@@ -228,8 +223,6 @@
     }
   }
 
-  let scrollListeners = [];
-
   // Start video time sync
   function startVideoSync() {
     const video = document.querySelector('video');
@@ -244,36 +237,44 @@
 
     const container = document.getElementById('transcript-content');
     if (container) {
-      // Limpiar listeners previos primero
-      detachScrollListeners();
+      // Detectar scroll dentro del contenedor
+      container.addEventListener('scroll', handleUserScroll, { passive: true });
       
-      const handlers = [
-        { event: 'scroll', fn: handleUserScroll },
-        { event: 'mousedown', fn: () => markUserScroll(5000) },
-        { event: 'wheel', fn: () => markUserScroll(5000) },
-        { event: 'touchstart', fn: () => markUserScroll(5000) }
-      ];
+      // Detectar cuando el usuario interactúa con el contenedor
+      container.addEventListener('mousedown', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
       
-      handlers.forEach(({ event, fn }) => {
-        container.addEventListener(event, fn, { passive: true });
-        scrollListeners.push({ container, event, fn });
-      });
+      // Detectar wheel events (scroll con mouse)
+      container.addEventListener('wheel', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
+      
+      // Detectar touch events (scroll en móvil/tablet)
+      container.addEventListener('touchstart', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
     }
 
     console.log('✓ Video sync started');
-  }
-
-  function detachScrollListeners() {
-    while (scrollListeners.length) {
-      const { container, event, fn } = scrollListeners.pop();
-      container.removeEventListener(event, fn);
-    }
-  }
-
-  function markUserScroll(timeoutMs) {
-    isUserScrolling = true;
-    if (scrollTimeout) clearTimeout(scrollTimeout);
-    scrollTimeout = setTimeout(() => { isUserScrolling = false; }, timeoutMs);
   }
 
   // Stop video time sync
@@ -284,7 +285,10 @@
       videoTimeUpdateListener = null;
     }
 
-    detachScrollListeners();
+    const container = document.getElementById('transcript-content');
+    if (container) {
+      container.removeEventListener('scroll', handleUserScroll);
+    }
 
     currentActiveIndex = -1;
     isUserScrolling = false;
@@ -631,7 +635,7 @@
       
       if (!transcriptPanel) {
         console.error('Available panels:', panels.map(p => {
-          const renderer = p.engagementPanelSectionRenderer;
+          const renderer = p.engagementPanelSectionListRenderer;
           return {
             hasContent: !!renderer?.content,
             title: renderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText
@@ -955,8 +959,8 @@
           
           // ✅ FIX: Buscar ambos tipos de panel
           const hasTranscriptPanel = panels.some(p =>
-            p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint ||
-            p.engagementPanelSectionRenderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText?.toLowerCase().includes('transcript')
+            p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint ||
+            p.engagementPanelSectionListRenderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText?.toLowerCase().includes('transcript')
           );
           
           if (hasTranscriptPanel) {
@@ -1090,40 +1094,21 @@
   // TRANSCRIPT FETCHING
   // ============================================================================
 
-  const transcriptCache = new Map(); // videoId_lang -> data
-
   async function fetchTranscript(languageCode = null) {
     try {
       const videoId = getVideoId();
-      const cacheKey = `${videoId}_${languageCode || 'default'}`;
-      
-      // ✅ Verificar cache primero
-      if (transcriptCache.has(cacheKey)) {
-        console.log('✓ Using cached transcript');
-        transcriptData = transcriptCache.get(cacheKey);
-        displayTranscript(transcriptData);
-        return true;
+      if (!videoId) {
+        showError('Could not find video ID');
+        return false;
       }
-    
+
       console.log('Fetching transcript for video:', videoId, 'language:', languageCode || 'auto-detect');
 
       const result = await getTranscriptUrl(videoId, languageCode);
       
-      // ✅ Validar que seguimos en el mismo video
-      if (requestedVideoId !== getVideoId()) {
-        console.warn('⚠️ Video changed during fetch, discarding results');
-        return false;
-      }
-      
-      // ✅ Guardar en cache después de obtener
       if (Array.isArray(result)) {
-        transcriptCache.set(cacheKey, result);
-        // Limitar tamaño del cache (últimos 5 videos)
-        if (transcriptCache.size > 5) {
-          const firstKey = transcriptCache.keys().next().value;
-          transcriptCache.delete(firstKey);
-        }
         transcriptData = result;
+        console.log(`✓ Loaded transcript, entries: ${transcriptData.length}`);
         displayTranscript(transcriptData);
         return true;
       }
@@ -1238,7 +1223,7 @@
       button.disabled = false;
       button.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 008 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
         </svg>
         Load Transcript
       `;
@@ -1363,7 +1348,7 @@
           </div>
           <button id="load-transcript-btn" class="load-transcript-btn">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 008 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+              <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
             </svg>
             Load Transcript
           </button>
@@ -1465,11 +1450,11 @@
       button.disabled = false;
       button.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 008 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
       `;
       button.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 008 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
         </svg>
         Retry Load Transcript
       `;
@@ -1585,40 +1570,8 @@
     startVideoSync();
   }
 
-  // Agregar después de escapeRegex()
-  function sanitizeHTML(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  function highlightText(text, searchTerm) {
-    if (!searchTerm) return sanitizeHTML(text);
-    
-    const escaped = escapeRegex(searchTerm);
-    const regex = new RegExp(`(${escaped})`, 'gi');
-    const sanitized = sanitizeHTML(text);
-    
-    return sanitized.replace(regex, '<mark>$1</mark>');
-  }
-
-  let searchDebounceTimeout = null;
-
   function handleSearch(e) {
     const searchTerm = e.target.value.toLowerCase().trim();
-    
-    // Limpiar timeout anterior
-    if (searchDebounceTimeout) {
-      clearTimeout(searchDebounceTimeout);
-    }
-    
-    // Debounce de 300ms
-    searchDebounceTimeout = setTimeout(() => {
-      performSearch(searchTerm);
-    }, 300);
-  }
-
-  function performSearch(searchTerm) {
     currentSearchTerm = searchTerm;
 
     if (!searchTerm) {
@@ -1638,9 +1591,11 @@
     }
 
     const container = document.getElementById('transcript-content');
+    const escapedSearch = escapeRegex(searchTerm);
+    const regex = new RegExp(`(${escapedSearch})`, 'gi');
 
     container.innerHTML = filtered.map((entry, index) => {
-      const highlightedText = highlightText(entry.text, searchTerm);
+      const highlightedText = entry.text.replace(regex, '<mark>$1</mark>');
       const originalIndex = transcriptData.indexOf(entry);
       return `
         <div class="transcript-entry" data-start="${entry.start}" data-index="${originalIndex}">
