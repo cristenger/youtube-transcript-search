@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "description": "Display and search YouTube video transcripts with clickable timestamps",
   "permissions": [
-    "activeTab",
     "storage"
   ],
   "host_permissions": [
