@@ -5,6 +5,10 @@
   let transcriptData = [];
   let currentSearchTerm = '';
   let observerInstance = null;
+  let videoTimeUpdateListener = null;
+  let currentActiveIndex = -1;
+  let isUserScrolling = false;
+  let scrollTimeout = null;
 
   // Error classes
   class TranscriptError extends Error {
@@ -87,6 +91,118 @@
     if (video) {
       video.currentTime = seconds;
       video.play();
+    }
+  }
+
+  // Detect user scrolling
+  function handleUserScroll() {
+    isUserScrolling = true;
+    
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+    }
+    
+    // Resume auto-scroll after 3 seconds of no user interaction
+    scrollTimeout = setTimeout(() => {
+      isUserScrolling = false;
+    }, 3000);
+  }
+
+  // Update active transcript entry based on video time
+  function updateActiveTranscript() {
+    const video = document.querySelector('video');
+    if (!video || !transcriptData || transcriptData.length === 0) {
+      return;
+    }
+
+    const currentTime = video.currentTime;
+    
+    // Find the current transcript entry
+    let activeIndex = -1;
+    for (let i = transcriptData.length - 1; i >= 0; i--) {
+      if (currentTime >= transcriptData[i].start) {
+        activeIndex = i;
+        break;
+      }
+    }
+
+    // Only update if the active index changed
+    if (activeIndex !== currentActiveIndex) {
+      currentActiveIndex = activeIndex;
+      highlightActiveEntry(activeIndex);
+    }
+  }
+
+  // Highlight the active entry and scroll to it
+  function highlightActiveEntry(index) {
+    const container = document.getElementById('transcript-content');
+    if (!container) return;
+
+    // Remove previous active class
+    const prevActive = container.querySelector('.transcript-entry.active');
+    if (prevActive) {
+      prevActive.classList.remove('active');
+    }
+
+    // Add active class to current entry
+    if (index >= 0) {
+      const entries = container.querySelectorAll('.transcript-entry');
+      if (entries[index]) {
+        entries[index].classList.add('active');
+        
+        // Auto-scroll only if user is not manually scrolling
+        if (!isUserScrolling) {
+          entries[index].scrollIntoView({
+            behavior: 'smooth',
+            block: 'center'
+          });
+        }
+      }
+    }
+  }
+
+  // Start video time sync
+  function startVideoSync() {
+    const video = document.querySelector('video');
+    if (!video) return;
+
+    // Remove previous listener if it exists
+    if (videoTimeUpdateListener) {
+      video.removeEventListener('timeupdate', videoTimeUpdateListener);
+    }
+
+    // Create new listener
+    videoTimeUpdateListener = () => updateActiveTranscript();
+    video.addEventListener('timeupdate', videoTimeUpdateListener);
+
+    // Add scroll listener to detect user scrolling
+    const container = document.getElementById('transcript-content');
+    if (container) {
+      container.addEventListener('scroll', handleUserScroll, { passive: true });
+    }
+
+    console.log('✓ Video sync started');
+  }
+
+  // Stop video time sync
+  function stopVideoSync() {
+    const video = document.querySelector('video');
+    if (video && videoTimeUpdateListener) {
+      video.removeEventListener('timeupdate', videoTimeUpdateListener);
+      videoTimeUpdateListener = null;
+    }
+
+    const container = document.getElementById('transcript-content');
+    if (container) {
+      container.removeEventListener('scroll', handleUserScroll);
+    }
+
+    currentActiveIndex = -1;
+    isUserScrolling = false;
+    
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = null;
     }
   }
 
@@ -750,6 +866,9 @@
     
     console.log('Resetting transcript panel for new video');
     
+    // Stop video sync
+    stopVideoSync();
+    
     // Clear data
     transcriptData = [];
     currentSearchTerm = '';
@@ -780,7 +899,7 @@
       container.innerHTML = `
         <div class="transcript-instructions">
           <p>📝 Click "Load Transcript" to fetch the video captions</p>
-          <p class="transcript-tip">💡 Tip: Subtitles will be enabled automatically if needed</p>
+          <p class="transcript-tip">💡 Tip: The transcript will auto-scroll as the video plays</p>
         </div>
       `;
     }
@@ -862,7 +981,7 @@
         <div class="transcript-content" id="transcript-content">
           <div class="transcript-instructions">
             <p>📝 Click "Load Transcript" to fetch the video captions</p>
-            <p class="transcript-tip">💡 Tip: Subtitles will be enabled automatically if needed</p>
+            <p class="transcript-tip">💡 Tip: The transcript will auto-scroll as the video plays</p>
           </div>
         </div>
       `;
@@ -930,7 +1049,7 @@
     }
 
     container.innerHTML = data.map((entry, index) => `
-      <div class="transcript-entry" data-start="${entry.start}">
+      <div class="transcript-entry" data-start="${entry.start}" data-index="${index}">
         <span class="timestamp">${formatTime(entry.start)}</span>
         <span class="transcript-text">${entry.text}</span>
       </div>
@@ -940,8 +1059,20 @@
       entry.addEventListener('click', () => {
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
+        
+        // Pause auto-scroll temporarily when user clicks
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 2000);
       });
     });
+
+    // Start video sync after displaying transcript
+    startVideoSync();
   }
 
   // Handle search input
@@ -961,6 +1092,7 @@
     if (filtered.length === 0) {
       const container = document.getElementById('transcript-content');
       container.innerHTML = '<div class="no-results">No results found</div>';
+      stopVideoSync(); // Stop sync when no results
       return;
     }
 
@@ -968,10 +1100,11 @@
     const escapedSearch = escapeRegex(searchTerm);
     const regex = new RegExp(`(${escapedSearch})`, 'gi');
 
-    container.innerHTML = filtered.map(entry => {
+    container.innerHTML = filtered.map((entry, index) => {
       const highlightedText = entry.text.replace(regex, '<mark>$1</mark>');
+      const originalIndex = transcriptData.indexOf(entry);
       return `
-        <div class="transcript-entry" data-start="${entry.start}">
+        <div class="transcript-entry" data-start="${entry.start}" data-index="${originalIndex}">
           <span class="timestamp">${formatTime(entry.start)}</span>
           <span class="transcript-text">${highlightedText}</span>
         </div>
@@ -982,8 +1115,20 @@
       entry.addEventListener('click', () => {
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
+        
+        // Pause auto-scroll temporarily when user clicks
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 2000);
       });
     });
+
+    // Restart video sync with filtered results
+    startVideoSync();
   }
 
   // Show error message
