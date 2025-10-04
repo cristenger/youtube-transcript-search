@@ -4,7 +4,6 @@
 
   let transcriptData = [];
   let currentSearchTerm = '';
-  let preserveFormatting = false;
   let observerInstance = null;
 
   // Error classes
@@ -65,15 +64,14 @@
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 
-  // Decode HTML entities with optional formatting preservation
+  // Decode HTML entities
   function decodeHTMLEntities(text) {
     const textarea = document.createElement('textarea');
     textarea.innerHTML = text;
     let decoded = textarea.value;
     
-    if (!preserveFormatting) {
-      decoded = decoded.replace(/\n/g, ' ').replace(/\s+/g, ' ');
-    }
+    // Always normalize whitespace
+    decoded = decoded.replace(/\n/g, ' ').replace(/\s+/g, ' ');
     
     return decoded;
   }
@@ -182,15 +180,30 @@
     return new Promise((resolve, reject) => {
       const eventId = 'transcriptFetch_' + Date.now() + '_' + Math.random();
       
-      console.log('Setting up fetch with eventId:', eventId);
+      console.log('🔍 Setting up fetch with eventId:', eventId);
+      console.log('🔍 Target URL:', url);
       
       const responseHandler = (event) => {
         if (event.detail && event.detail.eventId === eventId) {
-          console.log('Received response for eventId:', eventId);
+          console.log('✓ Received response for eventId:', eventId);
+          console.log('📦 Response detail:', event.detail);
+          console.log('📦 Success:', event.detail.success);
+          console.log('📦 Data type:', typeof event.detail.data);
+          console.log('📦 Data length:', event.detail.data?.length || 0);
+          console.log('📦 First 500 chars:', event.detail.data?.substring(0, 500));
+          
           window.removeEventListener('transcriptFetchResponse', responseHandler);
+          
           if (event.detail.success) {
-            resolve(event.detail.data);
+            if (!event.detail.data || event.detail.data.length === 0) {
+              console.error('❌ Success but empty data received');
+              reject(new Error('Empty response from API'));
+            } else {
+              console.log('✓ Resolving with data');
+              resolve(event.detail.data);
+            }
           } else {
+            console.error('❌ Fetch failed:', event.detail.error);
             reject(new Error(event.detail.error || 'Fetch failed'));
           }
         }
@@ -198,14 +211,15 @@
       
       window.addEventListener('transcriptFetchResponse', responseHandler);
       
-      console.log('Dispatching fetch request for URL:', url);
+      console.log('📤 Dispatching fetch request...');
       window.dispatchEvent(new CustomEvent('transcriptFetchRequest', {
         detail: { url, eventId }
       }));
       
       setTimeout(() => {
         window.removeEventListener('transcriptFetchResponse', responseHandler);
-        reject(new Error('Fetch timeout'));
+        console.error('⏱️ Fetch timeout after 10 seconds for eventId:', eventId);
+        reject(new Error('Fetch timeout after 10 seconds'));
       }, 10000);
     });
   }
@@ -403,12 +417,148 @@
         return await extractTranscriptFromHtml(response.html, languageCode);
       }
       
-      return await extractTranscriptFromPage(videoId, languageCode);
+      // First try: Extract from page context (most reliable)
+      console.log('🔍 Attempting to extract from page context...');
+      const pageData = await extractDataFromPageContext();
+      
+      // Try transcript panel method first (most reliable)
+      if (pageData.ytInitialData) {
+        const panels = pageData.ytInitialData?.engagementPanels || [];
+        const transcriptPanel = panels.find(p =>
+          p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+        );
+        
+        if (transcriptPanel) {
+          console.log('✅ Found transcript panel - using reliable method');
+          try {
+            const transcriptData = await getTranscriptFromPanel(pageData.ytInitialData, languageCode);
+            if (transcriptData && transcriptData.length > 0) {
+              console.log(`✓ Got ${transcriptData.length} entries from transcript panel`);
+              return transcriptData;
+            }
+          } catch (panelError) {
+            console.warn('⚠️ Transcript panel method failed:', panelError);
+          }
+        }
+      }
+      
+      // Second try: Use timedtext API (often returns empty)
+      if (pageData.ytInitialPlayerResponse) {
+        const tracks = pageData.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        
+        if (tracks && tracks.length > 0) {
+          console.log('⚠️ Falling back to timedtext API (less reliable)');
+          console.log('Found caption tracks:', tracks.length);
+          
+          let track = null;
+          if (languageCode) {
+            track = tracks.find(t => t.languageCode === languageCode);
+          }
+          if (!track) {
+            track = tracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || tracks[0];
+          }
+          
+          if (track && track.baseUrl) {
+            console.log('Selected track:', track.name?.simpleText || track.languageCode);
+            
+            // Try multiple formats
+            const formats = ['json3', 'srv3', 'srv2', 'srv1', 'ttml', 'vtt'];
+            
+            for (const fmt of formats) {
+              try {
+                const urlWithFormat = track.baseUrl.includes('?') 
+                  ? `${track.baseUrl}&fmt=${fmt}` 
+                  : `${track.baseUrl}?fmt=${fmt}`;
+                
+                console.log(`Trying format: ${fmt}`);
+                
+                const data = await fetchViaPageContext(urlWithFormat);
+                
+                if (!data || data.length === 0) {
+                  console.warn(`Format ${fmt} returned empty - trying next...`);
+                  continue;
+                }
+                
+                console.log(`✓ Format ${fmt} returned ${data.length} bytes`);
+                
+                // Try to parse
+                let parsed = null;
+                if (fmt === 'json3' || fmt.startsWith('srv')) {
+                  parsed = parseTranscriptJSON(data);
+                } else if (fmt === 'vtt') {
+                  parsed = parseTranscriptVTT(data);
+                } else {
+                  parsed = parseTranscriptXML(data);
+                }
+                
+                if (parsed && parsed.length > 0) {
+                  console.log(`✓ Successfully parsed ${fmt}: ${parsed.length} entries`);
+                  return parsed;
+                }
+              } catch (formatError) {
+                console.warn(`Format ${fmt} failed:`, formatError.message);
+              }
+            }
+            
+            console.error('❌ All formats returned empty or failed to parse');
+          }
+        }
+      }
+      
+      // Third try: Try to extract captions directly from video player
+      console.log('🎥 Attempting to extract captions from video player...');
+      const captionsFromPlayer = await extractCaptionsFromPlayer();
+      if (captionsFromPlayer && captionsFromPlayer.length > 0) {
+        console.log(`✓ Extracted ${captionsFromPlayer.length} entries from player`);
+        return captionsFromPlayer;
+      }
+      
+      // Last resort: Fetch page HTML
+      console.log('⚠️ Last resort: Fetching page HTML...');
+      try {
+        const response = await fetch(window.location.href);
+        const html = await response.text();
+        return await extractTranscriptFromHtml(html, languageCode);
+      } catch (error) {
+        console.error('Failed to fetch page HTML:', error);
+      }
+      
+      throw new TranscriptsDisabled(videoId);
       
     } catch (error) {
       console.error('Error getting transcript URL:', error);
       throw error;
     }
+  }
+
+  // Extract captions from video player
+  function extractCaptionsFromPlayer() {
+    return new Promise((resolve) => {
+      const eventId = 'captionsExtract_' + Date.now() + '_' + Math.random();
+      
+      const responseHandler = (event) => {
+        if (event.detail && event.detail.eventId === eventId) {
+          window.removeEventListener('captionsExtractResponse', responseHandler);
+          
+          if (event.detail.success && event.detail.data) {
+            resolve(event.detail.data);
+          } else {
+            resolve(null);
+          }
+        }
+      };
+      
+      window.addEventListener('captionsExtractResponse', responseHandler);
+      
+      window.dispatchEvent(new CustomEvent('captionsExtractRequest', {
+        detail: { eventId }
+      }));
+      
+      setTimeout(() => {
+        window.removeEventListener('captionsExtractResponse', responseHandler);
+        resolve(null);
+      }, 3000);
+    });
   }
 
   // ============================================================================
@@ -499,7 +649,7 @@
       const videoId = getVideoId();
       if (!videoId) {
         showError('Could not find video ID');
-        return;
+        return false;
       }
 
       console.log('Fetching transcript for video:', videoId, 'language:', languageCode || 'auto');
@@ -510,13 +660,13 @@
         transcriptData = result;
         console.log(`✓ Loaded transcript directly from panel, entries: ${transcriptData.length}`);
         displayTranscript(transcriptData);
-        return;
+        return true;
       }
       
       const transcriptUrl = result;
       if (!transcriptUrl) {
-        showError('No transcript available for this video.<br><br>💡 Make sure captions are available for this video.');
-        return;
+        showError('No transcript available for this video.<br><br>💡 Make sure captions are available for this video.<br><br><strong>Try enabling subtitles manually and retry.</strong>');
+        return false;
       }
 
       console.log('Fetching from URL:', transcriptUrl);
@@ -529,8 +679,8 @@
       
       if (!data || data.length === 0) {
         console.error('Empty response from transcript URL');
-        showError('The transcript API returned empty data.');
-        return;
+        showError('The transcript API returned empty data.<br><br>💡 <strong>Try these steps:</strong><br>1. Enable subtitles on the video player<br>2. Change subtitle language<br>3. Click "Retry Load Transcript"');
+        return false;
       }
       
       console.log('✓ Received data:', data.length, 'bytes');
@@ -550,7 +700,7 @@
           if (transcriptData.length > 0) {
             console.log(`✓ Parsed as JSON3, entries: ${transcriptData.length}`);
             displayTranscript(transcriptData);
-            return;
+            return true;
           }
         }
       } catch (e) {
@@ -569,21 +719,23 @@
           if (transcriptData.length > 0) {
             console.log(`✓ Successfully parsed with ${parser.name}, entries: ${transcriptData.length}`);
             displayTranscript(transcriptData);
-            return;
+            return true;
           }
         } catch (e) {
           console.warn(`Failed to parse as ${parser.name}:`, e);
         }
       }
       
-      showError('Could not parse transcript data.');
+      showError('Could not parse transcript data.<br><br>💡 <strong>Try:</strong><br>1. Enable subtitles manually<br>2. Change subtitle language<br>3. Click "Retry Load Transcript"');
+      return false;
     } catch (error) {
       console.error('Error fetching transcript:', error);
       if (error instanceof TranscriptError) {
-        showError(error.message);
+        showError(error.message + '<br><br>💡 Try enabling subtitles manually and retry.');
       } else {
-        showError('Failed to load transcript: ' + error.message);
+        showError('Failed to load transcript: ' + error.message + '<br><br>💡 Try enabling subtitles manually and retry.');
       }
+      return false;
     }
   }
 
@@ -695,10 +847,6 @@
           <div class="search-container" id="search-container" style="display: none;">
             <input type="text" id="transcript-search" placeholder="Search transcript...">
             <div class="transcript-options">
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--yt-spec-text-secondary, #aaa); cursor: pointer;">
-                <input type="checkbox" id="preserve-formatting" style="cursor: pointer;">
-                Preserve text formatting
-              </label>
               <button id="copy-transcript-btn" class="copy-transcript-btn">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2zm0 1a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V4a1 1 0 00-1-1H4z"/>
@@ -724,15 +872,6 @@
       document.getElementById('load-transcript-btn').addEventListener('click', handleLoadTranscript);
       document.getElementById('transcript-search').addEventListener('input', handleSearch);
       document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
-      document.getElementById('preserve-formatting').addEventListener('change', (e) => {
-        preserveFormatting = e.target.checked;
-        if (transcriptData.length > 0) {
-          displayTranscript(transcriptData);
-          if (currentSearchTerm) {
-            handleSearch({ target: { value: currentSearchTerm } });
-          }
-        }
-      });
 
       const languageSelect = document.getElementById('subtitle-language');
       languageSelect.addEventListener('change', (e) => {
@@ -756,16 +895,28 @@
     button.disabled = true;
     button.innerHTML = `
       <svg class="spinning" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12z" opacity="0.3"/>
+        <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12V0z" opacity="0.3"/>
         <path d="M8 0a8 8 0 000 16V14a6 6 0 010-12V0z"/>
       </svg>
       Loading...
     `;
     
-    await fetchTranscript(languageCode);
+    const success = await fetchTranscript(languageCode);
     
-    button.style.display = 'none';
-    searchContainer.style.display = 'block';
+    // Only hide button and show search if successful
+    if (success) {
+      button.style.display = 'none';
+      searchContainer.style.display = 'block';
+    } else {
+      // Re-enable button for retry
+      button.disabled = false;
+      button.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+        </svg>
+        Retry Load Transcript
+      `;
+    }
   }
 
   // Display transcript in panel
@@ -842,17 +993,7 @@
       container.innerHTML = `<div class="error">${message}</div>`;
     }
     
-    const button = document.getElementById('load-transcript-btn');
-    if (button) {
-      button.style.display = 'block';
-      button.disabled = false;
-      button.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
-        </svg>
-        Load Transcript
-      `;
-    }
+    // Don't reset button here - let handleLoadTranscript manage it
   }
 
   // ============================================================================

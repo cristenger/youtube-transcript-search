@@ -159,8 +159,11 @@
   
   // Listen for fetch requests from content script
   window.addEventListener('transcriptFetchRequest', async (event) => {
-    console.log('Page script received fetch request:', event.detail);
+    console.log('📥 Page script received fetch request:', event.detail);
     const { url, eventId } = event.detail;
+    
+    console.log('🌐 Making XHR request to:', url);
+    console.log('🆔 Event ID:', eventId);
     
     try {
       const xhr = new XMLHttpRequest();
@@ -171,9 +174,20 @@
       xhr.responseType = 'text';
       
       xhr.onload = function() {
-        console.log('XHR loaded, status:', xhr.status, 'response length:', xhr.responseText?.length || 0);
+        console.log('✓ XHR onload triggered');
+        console.log('📊 Status:', xhr.status);
+        console.log('📊 Status text:', xhr.statusText);
+        console.log('📊 Ready state:', xhr.readyState);
+        console.log('📊 Response type:', xhr.responseType);
+        console.log('📊 Response text length:', xhr.responseText?.length || 0);
+        console.log('📊 First 500 chars:', xhr.responseText?.substring(0, 500));
+        console.log('📊 All response headers:', xhr.getAllResponseHeaders());
         
         if (xhr.status === 200) {
+          if (!xhr.responseText || xhr.responseText.length === 0) {
+            console.error('❌ Status 200 but empty response!');
+          }
+          
           window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
             detail: {
               eventId,
@@ -182,6 +196,7 @@
             }
           }));
         } else {
+          console.error('❌ Non-200 status:', xhr.status);
           window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
             detail: {
               eventId,
@@ -193,7 +208,9 @@
       };
       
       xhr.onerror = function() {
-        console.error('XHR error');
+        console.error('❌ XHR onerror triggered');
+        console.error('Status:', xhr.status);
+        console.error('Ready state:', xhr.readyState);
         window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
           detail: {
             eventId,
@@ -203,10 +220,30 @@
         }));
       };
       
-      console.log('Sending XHR request...');
+      xhr.ontimeout = function() {
+        console.error('⏱️ XHR timeout');
+        window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
+          detail: {
+            eventId,
+            success: false,
+            error: 'Request timeout'
+          }
+        }));
+      };
+      
+      xhr.onprogress = function(event) {
+        if (event.lengthComputable) {
+          console.log(`📥 Progress: ${event.loaded} / ${event.total} bytes`);
+        } else {
+          console.log(`📥 Progress: ${event.loaded} bytes`);
+        }
+      };
+      
+      console.log('📤 Sending XHR request...');
       xhr.send();
     } catch (error) {
-      console.error('Exception in page script:', error);
+      console.error('❌ Exception in page script fetch:', error);
+      console.error('Stack:', error.stack);
       window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
         detail: {
           eventId,
