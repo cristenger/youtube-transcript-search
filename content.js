@@ -145,9 +145,10 @@
       clearTimeout(scrollTimeout);
     }
     
+    // Aumentar el tiempo de espera a 5 segundos para dar más margen al usuario
     scrollTimeout = setTimeout(() => {
       isUserScrolling = false;
-    }, 3000);
+    }, 5000);
   }
 
   // Update active transcript entry based on video time
@@ -188,11 +189,35 @@
       if (entries[index]) {
         entries[index].classList.add('active');
         
+        // Solo hacer scroll automático si el usuario NO está scrolleando manualmente
         if (!isUserScrolling) {
-          entries[index].scrollIntoView({
-            behavior: 'smooth',
-            block: 'center'
-          });
+          const containerRect = container.getBoundingClientRect();
+          const entryRect = entries[index].getBoundingClientRect();
+          
+          // Calcular la posición relativa del elemento dentro del contenedor
+          const relativeTop = entryRect.top - containerRect.top;
+          const relativeBottom = entryRect.bottom - containerRect.top;
+          
+          // Verificar si el elemento está fuera del viewport visible del contenedor
+          const isAboveView = relativeTop < 0;
+          const isBelowView = relativeBottom > containerRect.height;
+          
+          // Solo hacer scroll si el elemento NO está completamente visible
+          if (isAboveView || isBelowView) {
+            // Calcular la posición de scroll deseada (centrar el elemento)
+            const entryOffset = entries[index].offsetTop;
+            const containerHeight = container.clientHeight;
+            const entryHeight = entries[index].offsetHeight;
+            
+            // Centrar el elemento en el contenedor
+            const targetScroll = entryOffset - (containerHeight / 2) + (entryHeight / 2);
+            
+            // Hacer scroll suave solo dentro del contenedor
+            container.scrollTo({
+              top: Math.max(0, targetScroll),
+              behavior: 'smooth'
+            });
+          }
         }
       }
     }
@@ -212,7 +237,41 @@
 
     const container = document.getElementById('transcript-content');
     if (container) {
+      // Detectar scroll dentro del contenedor
       container.addEventListener('scroll', handleUserScroll, { passive: true });
+      
+      // Detectar cuando el usuario interactúa con el contenedor
+      container.addEventListener('mousedown', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
+      
+      // Detectar wheel events (scroll con mouse)
+      container.addEventListener('wheel', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
+      
+      // Detectar touch events (scroll en móvil/tablet)
+      container.addEventListener('touchstart', () => {
+        isUserScrolling = true;
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        scrollTimeout = setTimeout(() => {
+          isUserScrolling = false;
+        }, 5000);
+      }, { passive: true });
     }
 
     console.log('✓ Video sync started');
@@ -558,11 +617,30 @@
     try {
       // Find the transcript panel
       const panels = ytData?.engagementPanels || [];
-      const transcriptPanel = panels.find(p =>
-        p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
-      );
+      
+      // ✅ FIX: Buscar el panel con más criterios
+      const transcriptPanel = panels.find(p => {
+        const renderer = p.engagementPanelSectionListRenderer;
+        if (!renderer) return false;
+        
+        // Buscar por endpoint
+        const hasEndpoint = renderer.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint;
+        
+        // Buscar por título
+        const title = renderer.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText?.toLowerCase();
+        const hasTitle = title && title.includes('transcript');
+        
+        return hasEndpoint || hasTitle;
+      });
       
       if (!transcriptPanel) {
+        console.error('Available panels:', panels.map(p => {
+          const renderer = p.engagementPanelSectionListRenderer;
+          return {
+            hasContent: !!renderer?.content,
+            title: renderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText
+          };
+        }));
         throw new Error("Could not find transcript panel");
       }
       
@@ -710,7 +788,7 @@
     if (ytData) {
       const panels = ytData?.engagementPanels || [];
       const hasTranscriptPanel = panels.some(p =>
-        p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+        p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
       );
       
       if (hasTranscriptPanel) {
@@ -836,8 +914,11 @@
       // 🆕 PRIORIDAD 1: Try transcript panel method first (MOST RELIABLE)
       if (pageData.ytInitialData) {
         const panels = pageData.ytInitialData?.engagementPanels || [];
-        const transcriptPanel = panels.find(p =>
-          p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+        
+        // ✅ FIX: Buscar ambos tipos de panel
+        const transcriptPanel = panels.find(p => 
+          p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint ||
+          p.engagementPanelSectionRenderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText?.toLowerCase().includes('transcript')
         );
         
         if (transcriptPanel) {
@@ -856,8 +937,7 @@
         }
       }
       
-      // 🆕 PRIORIDAD 2: Try to get from caption tracks but DON'T use timedtext API
-      // Instead, try to extract directly from player or use alternative method
+      // 🆕 PRIORIDAD 2: Try to get from caption tracks
       console.log('🎥 Attempting to extract captions from video player...');
       const captionsFromPlayer = await extractCaptionsFromPlayer();
       if (captionsFromPlayer && captionsFromPlayer.length > 0) {
@@ -876,8 +956,11 @@
         
         if (ytData) {
           const panels = ytData?.engagementPanels || [];
+          
+          // ✅ FIX: Buscar ambos tipos de panel
           const hasTranscriptPanel = panels.some(p =>
-            p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+            p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint ||
+            p.engagementPanelSectionListRenderer?.header?.engagementPanelTitleHeaderRenderer?.title?.simpleText?.toLowerCase().includes('transcript')
           );
           
           if (hasTranscriptPanel) {
@@ -1116,20 +1199,25 @@
     
     console.log('Resetting transcript panel for new video');
     
+    // ✅ IMPORTANTE: Detener sync y limpiar TODOS los datos PRIMERO
     stopVideoSync();
     
+    // ✅ Limpiar variables globales
     transcriptData = [];
     currentSearchTerm = '';
     isPanelMinimized = false;
     availableLanguages = [];
     currentLanguageParams = null;
+    currentActiveIndex = -1;
     
     const button = document.getElementById('load-transcript-btn');
     const refreshBtn = document.getElementById('refresh-transcript-btn');
     const searchContainer = document.getElementById('search-container');
     const languageSelectorContainer = document.getElementById('language-selector-container');
     const container = document.getElementById('transcript-content');
+    const minimizeBtn = document.getElementById('minimize-panel-btn');
     
+    // ✅ Restaurar botón de carga CON TEXTO
     if (button) {
       button.style.display = 'block';
       button.disabled = false;
@@ -1141,29 +1229,66 @@
       `;
     }
 
+    // ✅ Ocultar botón de refresh
     if (refreshBtn) {
       refreshBtn.style.display = 'none';
+      refreshBtn.disabled = false;
     }
     
+    // ✅ Ocultar selector de idiomas
     if (languageSelectorContainer) {
       languageSelectorContainer.style.display = 'none';
+      const languageSelect = document.getElementById('language-selector');
+      if (languageSelect) {
+        languageSelect.innerHTML = '';
+      }
     }
     
+    // ✅ Ocultar y limpiar búsqueda
     if (searchContainer) {
       searchContainer.style.display = 'none';
       const searchInput = document.getElementById('transcript-search');
-      if (searchInput) searchInput.value = '';
+      if (searchInput) {
+        searchInput.value = '';
+      }
     }
     
+    // ✅ Restaurar estado del panel (expandido)
+    if (minimizeBtn) {
+      minimizeBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M4 8l4 4 4-4H4z"/>
+        </svg>
+      `;
+      minimizeBtn.title = 'Minimize transcript';
+    }
+    
+    if (panel) {
+      panel.style.maxHeight = '';
+    }
+    
+    // ✅ CRÍTICO: Limpiar contenido y mostrar instrucciones
     if (container) {
       container.style.display = 'block';
+      // ✅ Forzar limpieza completa del contenedor
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
+      
+      // ✅ Agregar las instrucciones
       container.innerHTML = `
         <div class="transcript-instructions">
           <p>📝 Click "Load Transcript" to fetch the video captions</p>
           <p class="transcript-tip">💡 Tip: You can select different languages after loading</p>
         </div>
       `;
+      
+      // ✅ Remover TODOS los listeners de scroll que puedan quedar
+      const newContainer = container.cloneNode(true);
+      container.parentNode.replaceChild(newContainer, container);
     }
+    
+    console.log('✓ Panel reset complete - ready for new video');
   }
 
   async function copyTranscriptToClipboard() {
@@ -1287,14 +1412,24 @@
     const searchContainer = document.getElementById('search-container');
     const languageSelectorContainer = document.getElementById('language-selector-container');
     
+    // ✅ AGREGAR: Prevenir múltiples clicks
+    if (button.disabled) {
+      console.warn('Load already in progress, ignoring click');
+      return;
+    }
+    
     button.disabled = true;
     button.innerHTML = `
       <svg class="spinning" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12V0z" opacity="0.3"/>
         <path d="M8 0a8 8 0 000 16V14a6 6 0 010-12V0z"/>
-      </svg>
-      Loading...
     `;
+    
+    // ✅ AGREGAR: Limpiar datos anteriores antes de cargar
+    stopVideoSync();
+    transcriptData = [];
+    currentSearchTerm = '';
+    currentActiveIndex = -1;
     
     const success = await fetchTranscript(languageCode);
     
@@ -1311,7 +1446,12 @@
         }
       }
     } else {
+      // ✅ FIX: Restaurar botón con texto correcto
       button.disabled = false;
+      button.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+      `;
       button.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
           <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
@@ -1337,8 +1477,6 @@
       <svg class="spinning" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12V0z" opacity="0.3"/>
         <path d="M8 0a8 8 0 000 16V14a6 6 0 010-12V0z"/>
-      </svg>
-      Refreshing...
     `;
     
     // Limpiar datos actuales
@@ -1389,12 +1527,20 @@
     }
   }
 
+  // Display transcript
   function displayTranscript(data) {
     const container = document.getElementById('transcript-content');
     if (!container) return;
 
     if (!data || data.length === 0) {
       container.innerHTML = '<div class="error">No transcript entries found</div>';
+      return;
+    }
+
+    // ✅ AGREGAR: Verificar que el video actual coincide con los datos que vamos a mostrar
+    const currentVideoId = getVideoId();
+    if (!currentVideoId) {
+      console.warn('⚠️ No video ID found, cannot display transcript');
       return;
     }
 
@@ -1410,6 +1556,7 @@
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
         
+        // Marcar como scrolling manual por menos tiempo cuando hace click
         isUserScrolling = true;
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
@@ -1463,6 +1610,7 @@
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
         
+        // Marcar como scrolling manual por menos tiempo cuando hace click
         isUserScrolling = true;
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
@@ -1497,20 +1645,52 @@
   // NAVIGATION DETECTION
   // ============================================================================
 
+  // ✅ MODIFICAR: Mejorar la detección de navegación
   function watchForNavigation() {
     let lastUrl = location.href;
+    let lastVideoId = getVideoId();
     
     const checkUrlChange = () => {
       const currentUrl = location.href;
-      if (currentUrl !== lastUrl) {
-        console.log('URL changed from', lastUrl, 'to', currentUrl);
-        lastUrl = currentUrl;
+      const currentVideoId = getVideoId();
+      
+      // ✅ Detectar cambio de video, no solo de URL
+      if (currentUrl !== lastUrl || currentVideoId !== lastVideoId) {
+        console.log('Navigation detected:');
+        console.log('  Previous URL:', lastUrl);
+        console.log('  Current URL:', currentUrl);
+        console.log('  Previous video:', lastVideoId);
+        console.log('  Current video:', currentVideoId);
         
-        if (currentUrl.includes('/watch')) {
-          console.log('Navigated to watch page');
+        lastUrl = currentUrl;
+        const previousVideoId = lastVideoId;
+        lastVideoId = currentVideoId;
+        
+        if (currentUrl.includes('/watch') && currentVideoId) {
+          console.log('✓ Navigated to new watch page');
+          
+          // ✅ IMPORTANTE: Primero limpiar inmediatamente para prevenir mostrar datos viejos
+          stopVideoSync();
+          transcriptData = [];
+          currentActiveIndex = -1;
+          
+          // ✅ Dar más tiempo a que YouTube cargue el nuevo video
           setTimeout(() => {
-            init();
-          }, 1000);
+            // ✅ Verificar que seguimos en el mismo video (no hubo otra navegación)
+            if (getVideoId() !== currentVideoId) {
+              console.log('⚠️ Video changed again during load, skipping reset');
+              return;
+            }
+            
+            const panel = document.getElementById('yt-transcript-panel');
+            if (panel) {
+              console.log('✓ Panel exists, resetting...');
+              resetTranscriptPanel();
+            } else {
+              console.log('✓ Panel does not exist, initializing...');
+              init();
+            }
+          }, 1000); // ✅ Aumentado a 1000ms para mejor estabilidad
         }
       }
     };
@@ -1522,6 +1702,10 @@
     });
     
     window.addEventListener('popstate', checkUrlChange);
+    window.addEventListener('yt-navigate-finish', checkUrlChange); // ✅ Evento nativo de YouTube
+    
+    // ✅ NUEVO: También escuchar el evento de cambio de estado del player
+    window.addEventListener('yt-page-data-updated', checkUrlChange);
     
     return observer;
   }
