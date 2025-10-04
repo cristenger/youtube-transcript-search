@@ -16,7 +16,15 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/watch*"],
-      "js": ["content.js"],
+      "js": [
+        "errors.js",
+        "utils.js",
+        "parsers.js",
+        "extraction.js",
+        "video-sync.js",
+        "ui.js",
+        "content-main.js"
+      ],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }

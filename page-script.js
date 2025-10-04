@@ -186,6 +186,15 @@
         if (xhr.status === 200) {
           if (!xhr.responseText || xhr.responseText.length === 0) {
             console.error('❌ Status 200 but empty response!');
+            console.error('⚠️ This usually means the URL is expired or YouTube blocked the request');
+            window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
+              detail: {
+                eventId,
+                success: false,
+                error: 'Empty response - URL may be expired or request blocked'
+              }
+            }));
+            return;
           }
           
           window.dispatchEvent(new CustomEvent('transcriptFetchResponse', {
