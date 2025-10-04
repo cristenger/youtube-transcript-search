@@ -1,4 +1,4 @@
-// YouTube Transcript Search Extension
+// YouTube Transcript Search Extension - MEJORADO
 (function() {
   'use strict';
 
@@ -9,6 +9,9 @@
   let currentActiveIndex = -1;
   let isUserScrolling = false;
   let scrollTimeout = null;
+  let isPanelMinimized = false; // Nuevo: estado del panel
+  let availableLanguages = []; // Nuevo: lista de idiomas disponibles
+  let currentLanguageParams = null; // Nuevo: params del idioma actual
 
   // Error classes
   class TranscriptError extends Error {
@@ -74,7 +77,6 @@
     textarea.innerHTML = text;
     let decoded = textarea.value;
     
-    // Always normalize whitespace
     decoded = decoded.replace(/\n/g, ' ').replace(/\s+/g, ' ');
     
     return decoded;
@@ -94,6 +96,47 @@
     }
   }
 
+  // 🆕 NUEVO: Detectar idioma de subtítulos activos en el reproductor
+  function getActiveSubtitleLanguage() {
+    try {
+      const video = document.querySelector('video');
+      if (!video || !video.textTracks) {
+        console.log('No video or textTracks found');
+        return null;
+      }
+
+      // Buscar el track que está activo (mode === 'showing')
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const track = video.textTracks[i];
+        if (track.mode === 'showing' && (track.kind === 'subtitles' || track.kind === 'captions')) {
+          console.log('✓ Found active subtitle track:', {
+            language: track.language,
+            label: track.label,
+            kind: track.kind
+          });
+          return track.language;
+        }
+      }
+
+      console.log('No active subtitle track found');
+      return null;
+    } catch (error) {
+      console.error('Error detecting active subtitle language:', error);
+      return null;
+    }
+  }
+
+  // 🆕 NUEVO: Obtener todos los idiomas disponibles
+  function getAvailableLanguages(tracks) {
+    if (!tracks || !Array.isArray(tracks)) return [];
+    
+    return tracks.map(track => ({
+      code: track.languageCode,
+      name: track.name?.simpleText || track.languageCode,
+      isTranslatable: track.isTranslatable || false
+    }));
+  }
+
   // Detect user scrolling
   function handleUserScroll() {
     isUserScrolling = true;
@@ -102,7 +145,6 @@
       clearTimeout(scrollTimeout);
     }
     
-    // Resume auto-scroll after 3 seconds of no user interaction
     scrollTimeout = setTimeout(() => {
       isUserScrolling = false;
     }, 3000);
@@ -117,7 +159,6 @@
 
     const currentTime = video.currentTime;
     
-    // Find the current transcript entry
     let activeIndex = -1;
     for (let i = transcriptData.length - 1; i >= 0; i--) {
       if (currentTime >= transcriptData[i].start) {
@@ -126,7 +167,6 @@
       }
     }
 
-    // Only update if the active index changed
     if (activeIndex !== currentActiveIndex) {
       currentActiveIndex = activeIndex;
       highlightActiveEntry(activeIndex);
@@ -138,19 +178,16 @@
     const container = document.getElementById('transcript-content');
     if (!container) return;
 
-    // Remove previous active class
     const prevActive = container.querySelector('.transcript-entry.active');
     if (prevActive) {
       prevActive.classList.remove('active');
     }
 
-    // Add active class to current entry
     if (index >= 0) {
       const entries = container.querySelectorAll('.transcript-entry');
       if (entries[index]) {
         entries[index].classList.add('active');
         
-        // Auto-scroll only if user is not manually scrolling
         if (!isUserScrolling) {
           entries[index].scrollIntoView({
             behavior: 'smooth',
@@ -166,16 +203,13 @@
     const video = document.querySelector('video');
     if (!video) return;
 
-    // Remove previous listener if it exists
     if (videoTimeUpdateListener) {
       video.removeEventListener('timeupdate', videoTimeUpdateListener);
     }
 
-    // Create new listener
     videoTimeUpdateListener = () => updateActiveTranscript();
     video.addEventListener('timeupdate', videoTimeUpdateListener);
 
-    // Add scroll listener to detect user scrolling
     const container = document.getElementById('transcript-content');
     if (container) {
       container.addEventListener('scroll', handleUserScroll, { passive: true });
@@ -232,11 +266,178 @@
     });
   }
 
+  // 🆕 NUEVO: Poblar el dropdown de idiomas
+  function populateLanguageSelector() {
+    const languageSelect = document.getElementById('language-selector');
+    if (!languageSelect) return;
+    
+    if (availableLanguages.length === 0) {
+      languageSelect.style.display = 'none';
+      return;
+    }
+    
+    // Limpiar opciones existentes
+    languageSelect.innerHTML = '';
+    
+    // Agregar opciones
+    availableLanguages.forEach((lang, index) => {
+      const option = document.createElement('option');
+      option.value = index.toString();
+      option.textContent = lang.name;
+      if (lang.isSelected) {
+        option.selected = true;
+      }
+      languageSelect.appendChild(option);
+    });
+    
+    languageSelect.style.display = 'block';
+    console.log(`✓ Language selector populated with ${availableLanguages.length} languages`);
+  }
+
+  // 🆕 NUEVO: Manejar cambio de idioma desde el dropdown
+  async function handleLanguageChange(event) {
+    const selectedIndex = parseInt(event.target.value);
+    const selectedLang = availableLanguages[selectedIndex];
+    
+    if (!selectedLang || !selectedLang.params) {
+      console.error('Invalid language selection');
+      return;
+    }
+    
+    console.log(`🌐 Changing language to: ${selectedLang.name}`);
+    
+    // Mostrar estado de carga
+    const container = document.getElementById('transcript-content');
+    if (container) {
+      container.innerHTML = `
+        <div class="loading">
+          <p>🔄 Loading ${selectedLang.name} transcript...</p>
+        </div>
+      `;
+    }
+    
+    // Limpiar datos actuales
+    stopVideoSync();
+    transcriptData = [];
+    currentSearchTerm = '';
+    
+    const searchInput = document.getElementById('transcript-search');
+    if (searchInput) searchInput.value = '';
+    
+    // Obtener transcripción en el nuevo idioma
+    try {
+      // Necesitamos ytData para hacer la solicitud
+      const pageData = await extractDataFromPageContext();
+      
+      if (!pageData.ytInitialData) {
+        throw new Error('Could not get page data');
+      }
+      
+      // Temporalmente guardar los params seleccionados
+      currentLanguageParams = selectedLang.params;
+      
+      // Hacer la solicitud con los nuevos params
+      const hl = pageData.ytInitialData.topbar?.desktopTopbarRenderer?.searchbox?.fusionSearchboxRenderer?.config?.webSearchboxConfig?.requestLanguage || "en";
+      const clientData = pageData.ytInitialData.responseContext?.serviceTrackingParams?.[0]?.params;
+      const visitorData = pageData.ytInitialData.responseContext?.webResponseContextExtensionData?.ytConfigData?.visitorData;
+      
+      const body = {
+        context: {
+          client: {
+            hl: hl,
+            visitorData: visitorData,
+            clientName: clientData?.[0]?.value || "WEB",
+            clientVersion: clientData?.[1]?.value || "2.20231219.01.00"
+          },
+          request: { useSsl: true }
+        },
+        params: selectedLang.params
+      };
+      
+      const res = await fetch("https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "X-YouTube-Client-Name": "1",
+          "X-YouTube-Client-Version": body.context.client.clientVersion
+        },
+        body: JSON.stringify(body)
+      });
+      
+      if (!res.ok) {
+        throw new Error(`API request failed: ${res.status}`);
+      }
+      
+      const json = await res.json();
+      const segments = json.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer
+        ?.content?.transcriptSearchPanelRenderer?.body?.transcriptSegmentListRenderer?.initialSegments || [];
+      
+      if (segments.length === 0) {
+        throw new Error('No segments found');
+      }
+      
+      transcriptData = segments.map(item => {
+        const seg = item?.transcriptSegmentRenderer;
+        if (!seg) return null;
+        
+        const timestamp = seg.startTimeText?.simpleText || "";
+        const text = seg.snippet?.runs?.map(r => r.text).join(" ") || "";
+        const startMs = seg.startMs || 0;
+        
+        return {
+          start: startMs / 1000,
+          duration: 0,
+          text: text
+        };
+      }).filter(item => item !== null);
+      
+      console.log(`✓ Loaded ${transcriptData.length} entries in ${selectedLang.name}`);
+      displayTranscript(transcriptData);
+      
+    } catch (error) {
+      console.error('Error changing language:', error);
+      showError(`Failed to load transcript in ${selectedLang.name}<br><br>Please try another language or refresh.`);
+    }
+  }
+  function togglePanelMinimize() {
+    const panel = document.getElementById('yt-transcript-panel');
+    const content = document.getElementById('transcript-content');
+    const searchContainer = document.getElementById('search-container');
+    const toggleBtn = document.getElementById('minimize-panel-btn');
+    
+    if (!panel || !content || !toggleBtn) return;
+
+    isPanelMinimized = !isPanelMinimized;
+
+    if (isPanelMinimized) {
+      content.style.display = 'none';
+      if (searchContainer) searchContainer.style.display = 'none';
+      toggleBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 4l4 4H4l4-4z"/>
+        </svg>
+      `;
+      toggleBtn.title = 'Expand transcript';
+      panel.style.maxHeight = '60px';
+    } else {
+      content.style.display = 'block';
+      if (searchContainer && transcriptData.length > 0) {
+        searchContainer.style.display = 'block';
+      }
+      toggleBtn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M4 8l4 4 4-4H4z"/>
+        </svg>
+      `;
+      toggleBtn.title = 'Minimize transcript';
+      panel.style.maxHeight = '';
+    }
+  }
+
   // ============================================================================
   // PAGE SCRIPT INJECTION
   // ============================================================================
 
-  // Inject fetch handler into page context
   function injectFetchHandler() {
     if (window.__transcriptFetchHandlerInjected) {
       console.log('Fetch handler already injected');
@@ -266,7 +467,6 @@
   // DATA EXTRACTION FUNCTIONS
   // ============================================================================
 
-  // Extract data from page context
   function extractDataFromPageContext() {
     return new Promise((resolve) => {
       const eventId = 'dataExtract_' + Date.now() + '_' + Math.random();
@@ -291,22 +491,15 @@
     });
   }
 
-  // Fetch via page context to bypass CORS
   function fetchViaPageContext(url) {
     return new Promise((resolve, reject) => {
       const eventId = 'transcriptFetch_' + Date.now() + '_' + Math.random();
       
       console.log('🔍 Setting up fetch with eventId:', eventId);
-      console.log('🔍 Target URL:', url);
       
       const responseHandler = (event) => {
         if (event.detail && event.detail.eventId === eventId) {
           console.log('✓ Received response for eventId:', eventId);
-          console.log('📦 Response detail:', event.detail);
-          console.log('📦 Success:', event.detail.success);
-          console.log('📦 Data type:', typeof event.detail.data);
-          console.log('📦 Data length:', event.detail.data?.length || 0);
-          console.log('📦 First 500 chars:', event.detail.data?.substring(0, 500));
           
           window.removeEventListener('transcriptFetchResponse', responseHandler);
           
@@ -334,13 +527,12 @@
       
       setTimeout(() => {
         window.removeEventListener('transcriptFetchResponse', responseHandler);
-        console.error('⏱️ Fetch timeout after 10 seconds for eventId:', eventId);
-        reject(new Error('Fetch timeout after 10 seconds'));
+        console.error('⏱️ Fetch timeout after 10 seconds');
+        reject(new Error('Fetch timeout'));
       }, 10000);
     });
   }
 
-  // Extract JSON from HTML
   function extractJsonFromHtml(html, key) {
     const regexes = [
       new RegExp(`window\\["${key}"\\]\\s*=\\s*({[\\s\\S]+?})\\s*;`),
@@ -362,60 +554,156 @@
     throw new Error(`${key} not found`);
   }
 
-  // Get transcript from panel (API continuation endpoint)
   async function getTranscriptFromPanel(ytData, languageCode = null) {
-    const continuationParams = ytData.engagementPanels?.find(p =>
-      p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
-    )?.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint?.params;
-    
-    if (!continuationParams) {
-      throw new Error("Could not find continuation params");
-    }
-    
-    const hl = ytData.topbar?.desktopTopbarRenderer?.searchbox?.fusionSearchboxRenderer?.config?.webSearchboxConfig?.requestLanguage || "en";
-    const clientData = ytData.responseContext?.serviceTrackingParams?.[0]?.params;
-    const visitorData = ytData.responseContext?.webResponseContextExtensionData?.ytConfigData?.visitorData;
-    
-    const body = {
-      context: {
-        client: {
-          hl,
-          visitorData,
-          clientName: clientData?.[0]?.value,
-          clientVersion: clientData?.[1]?.value
+    try {
+      // Find the transcript panel
+      const panels = ytData?.engagementPanels || [];
+      const transcriptPanel = panels.find(p =>
+        p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+      );
+      
+      if (!transcriptPanel) {
+        throw new Error("Could not find transcript panel");
+      }
+      
+      const hl = ytData.topbar?.desktopTopbarRenderer?.searchbox?.fusionSearchboxRenderer?.config?.webSearchboxConfig?.requestLanguage || "en";
+      const clientData = ytData.responseContext?.serviceTrackingParams?.[0]?.params;
+      const visitorData = ytData.responseContext?.webResponseContextExtensionData?.ytConfigData?.visitorData;
+      
+      const initialParams = transcriptPanel.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint?.params;
+      
+      if (!initialParams) {
+        throw new Error("Could not find continuation params");
+      }
+      
+      const body = {
+        context: {
+          client: {
+            hl: hl,
+            visitorData: visitorData,
+            clientName: clientData?.[0]?.value || "WEB",
+            clientVersion: clientData?.[1]?.value || "2.20231219.01.00"
+          },
+          request: { useSsl: true }
         },
-        request: { useSsl: true }
-      },
-      params: continuationParams
-    };
-    
-    const res = await fetch("https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    
-    const json = await res.json();
-    const segments = json.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer
-      ?.content?.transcriptSearchPanelRenderer?.body?.transcriptSegmentListRenderer?.initialSegments || [];
-    
-    return segments.map(item => {
-      const seg = item?.transcriptSegmentRenderer;
-      if (!seg) return null;
-      
-      const timestamp = seg.startTimeText?.simpleText || "";
-      const text = seg.snippet?.runs?.map(r => r.text).join(" ") || "";
-      const startMs = seg.startMs || 0;
-      
-      return {
-        start: startMs / 1000,
-        duration: 0,
-        text: text
+        params: initialParams
       };
-    }).filter(item => item !== null);
+      
+      console.log('📤 Getting transcript from panel...');
+      
+      const res = await fetch("https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "X-YouTube-Client-Name": "1",
+          "X-YouTube-Client-Version": body.context.client.clientVersion
+        },
+        body: JSON.stringify(body)
+      });
+      
+      if (!res.ok) {
+        throw new Error(`API request failed: ${res.status} ${res.statusText}`);
+      }
+      
+      const json = await res.json();
+      console.log('📥 API response received');
+      
+      const transcriptRenderer = json.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer;
+      
+      // 🆕 Extraer lista de idiomas disponibles
+      const footer = transcriptRenderer?.footer?.transcriptFooterRenderer;
+      const languageMenu = footer?.languageMenu?.sortFilterSubMenuRenderer?.subMenuItems;
+      
+      if (languageMenu && languageMenu.length > 0) {
+        availableLanguages = languageMenu.map(item => ({
+          name: item.title || 'Unknown',
+          params: item.continuation?.getTranscriptEndpoint?.params || null,
+          isSelected: item.selected || false
+        }));
+        console.log('📋 Available languages:', availableLanguages.map(l => l.name));
+      } else {
+        availableLanguages = [];
+        console.log('⚠️ No language options found');
+      }
+      
+      // Determinar qué params usar
+      let targetParams = initialParams;
+      
+      if (languageCode && availableLanguages.length > 0) {
+        // Buscar idioma específico solicitado
+        const targetLang = availableLanguages.find(lang => {
+          const langName = lang.name.toLowerCase();
+          const code = languageCode.toLowerCase();
+          return langName.includes(code) || 
+                 langName.includes(code.split('-')[0]) ||
+                 (code === 'es' && (langName.includes('español') || langName.includes('spanish'))) ||
+                 (code === 'en' && langName.includes('english')) ||
+                 (code === 'pt' && (langName.includes('português') || langName.includes('portuguese'))) ||
+                 (code === 'fr' && (langName.includes('français') || langName.includes('french')));
+        });
+        
+        if (targetLang && targetLang.params) {
+          targetParams = targetLang.params;
+          currentLanguageParams = targetParams;
+          console.log(`✓ Using language: ${targetLang.name}`);
+        }
+      } else {
+        // Guardar los params del idioma actual (por defecto)
+        currentLanguageParams = targetParams;
+      }
+      
+      // Si cambiamos de idioma, hacer segunda solicitud
+      let finalJson = json;
+      if (targetParams !== initialParams) {
+        console.log('📤 Fetching transcript in selected language...');
+        const langRes = await fetch("https://www.youtube.com/youtubei/v1/get_transcript?prettyPrint=false", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "X-YouTube-Client-Name": "1",
+            "X-YouTube-Client-Version": body.context.client.clientVersion
+          },
+          body: JSON.stringify({ ...body, params: targetParams })
+        });
+        
+        if (langRes.ok) {
+          finalJson = await langRes.json();
+        }
+      }
+      
+      // Extraer segmentos
+      const segments = finalJson.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer
+        ?.content?.transcriptSearchPanelRenderer?.body?.transcriptSegmentListRenderer?.initialSegments || [];
+      
+      if (segments.length === 0) {
+        console.warn('⚠️ API returned empty segments');
+        return [];
+      }
+      
+      const transcriptData = segments.map(item => {
+        const seg = item?.transcriptSegmentRenderer;
+        if (!seg) return null;
+        
+        const timestamp = seg.startTimeText?.simpleText || "";
+        const text = seg.snippet?.runs?.map(r => r.text).join(" ") || "";
+        const startMs = seg.startMs || 0;
+        
+        return {
+          start: startMs / 1000,
+          duration: 0,
+          text: text
+        };
+      }).filter(item => item !== null);
+      
+      console.log(`✓ Extracted ${transcriptData.length} transcript entries`);
+      return transcriptData;
+      
+    } catch (error) {
+      console.error('❌ Error in getTranscriptFromPanel:', error);
+      throw error;
+    }
   }
 
-  // Extract transcript from HTML
   async function extractTranscriptFromHtml(html, languageCode = null) {
     let ytData = extractJsonFromHtml(html, "ytInitialData");
     
@@ -454,7 +742,6 @@
     throw new TranscriptsDisabled(getVideoId());
   }
 
-  // Extract transcript from current page
   async function extractTranscriptFromPage(videoId, languageCode = null) {
     console.log('Attempting to extract transcript from page...');
     
@@ -509,7 +796,7 @@
     throw new TranscriptsDisabled(videoId);
   }
 
-  // Get transcript URL
+  // 🆕 MODIFICADO: Mejorada la lógica de selección de idioma
   async function getTranscriptUrl(videoId, languageCode = null) {
     console.log('Looking for caption tracks...');
     
@@ -533,21 +820,30 @@
         return await extractTranscriptFromHtml(response.html, languageCode);
       }
       
-      // First try: Extract from page context (most reliable)
+      // 🆕 NUEVO: Detectar idioma activo si no se especificó uno
+      let targetLanguage = languageCode;
+      if (!targetLanguage) {
+        const activeLanguage = getActiveSubtitleLanguage();
+        if (activeLanguage) {
+          console.log('✓ Detected active subtitle language:', activeLanguage);
+          targetLanguage = activeLanguage;
+        }
+      }
+
       console.log('🔍 Attempting to extract from page context...');
       const pageData = await extractDataFromPageContext();
       
-      // Try transcript panel method first (most reliable)
+      // 🆕 PRIORIDAD 1: Try transcript panel method first (MOST RELIABLE)
       if (pageData.ytInitialData) {
         const panels = pageData.ytInitialData?.engagementPanels || [];
         const transcriptPanel = panels.find(p =>
-          p.engagementPanelSectionRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+          p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
         );
         
         if (transcriptPanel) {
-          console.log('✅ Found transcript panel - using reliable method');
+          console.log('✅ Found transcript panel - using API method (most reliable)');
           try {
-            const transcriptData = await getTranscriptFromPanel(pageData.ytInitialData, languageCode);
+            const transcriptData = await getTranscriptFromPanel(pageData.ytInitialData, targetLanguage);
             if (transcriptData && transcriptData.length > 0) {
               console.log(`✓ Got ${transcriptData.length} entries from transcript panel`);
               return transcriptData;
@@ -555,73 +851,13 @@
           } catch (panelError) {
             console.warn('⚠️ Transcript panel method failed:', panelError);
           }
+        } else {
+          console.log('⚠️ No transcript panel found in ytInitialData');
         }
       }
       
-      // Second try: Use timedtext API (often returns empty)
-      if (pageData.ytInitialPlayerResponse) {
-        const tracks = pageData.ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        
-        if (tracks && tracks.length > 0) {
-          console.log('⚠️ Falling back to timedtext API (less reliable)');
-          console.log('Found caption tracks:', tracks.length);
-          
-          let track = null;
-          if (languageCode) {
-            track = tracks.find(t => t.languageCode === languageCode);
-          }
-          if (!track) {
-            track = tracks.find(t => t.languageCode === 'en' || t.languageCode.startsWith('en')) || tracks[0];
-          }
-          
-          if (track && track.baseUrl) {
-            console.log('Selected track:', track.name?.simpleText || track.languageCode);
-            
-            // Try multiple formats
-            const formats = ['json3', 'srv3', 'srv2', 'srv1', 'ttml', 'vtt'];
-            
-            for (const fmt of formats) {
-              try {
-                const urlWithFormat = track.baseUrl.includes('?') 
-                  ? `${track.baseUrl}&fmt=${fmt}` 
-                  : `${track.baseUrl}?fmt=${fmt}`;
-                
-                console.log(`Trying format: ${fmt}`);
-                
-                const data = await fetchViaPageContext(urlWithFormat);
-                
-                if (!data || data.length === 0) {
-                  console.warn(`Format ${fmt} returned empty - trying next...`);
-                  continue;
-                }
-                
-                console.log(`✓ Format ${fmt} returned ${data.length} bytes`);
-                
-                // Try to parse
-                let parsed = null;
-                if (fmt === 'json3' || fmt.startsWith('srv')) {
-                  parsed = parseTranscriptJSON(data);
-                } else if (fmt === 'vtt') {
-                  parsed = parseTranscriptVTT(data);
-                } else {
-                  parsed = parseTranscriptXML(data);
-                }
-                
-                if (parsed && parsed.length > 0) {
-                  console.log(`✓ Successfully parsed ${fmt}: ${parsed.length} entries`);
-                  return parsed;
-                }
-              } catch (formatError) {
-                console.warn(`Format ${fmt} failed:`, formatError.message);
-              }
-            }
-            
-            console.error('❌ All formats returned empty or failed to parse');
-          }
-        }
-      }
-      
-      // Third try: Try to extract captions directly from video player
+      // 🆕 PRIORIDAD 2: Try to get from caption tracks but DON'T use timedtext API
+      // Instead, try to extract directly from player or use alternative method
       console.log('🎥 Attempting to extract captions from video player...');
       const captionsFromPlayer = await extractCaptionsFromPlayer();
       if (captionsFromPlayer && captionsFromPlayer.length > 0) {
@@ -629,16 +865,35 @@
         return captionsFromPlayer;
       }
       
-      // Last resort: Fetch page HTML
+      // 🆕 PRIORIDAD 3: Last resort - fetch page HTML and try panel method
       console.log('⚠️ Last resort: Fetching page HTML...');
       try {
         const response = await fetch(window.location.href);
         const html = await response.text();
-        return await extractTranscriptFromHtml(html, languageCode);
+        
+        // Try to extract ytInitialData from HTML
+        let ytData = extractJsonFromHtml(html, "ytInitialData");
+        
+        if (ytData) {
+          const panels = ytData?.engagementPanels || [];
+          const hasTranscriptPanel = panels.some(p =>
+            p.engagementPanelSectionListRenderer?.content?.continuationItemRenderer?.continuationEndpoint?.getTranscriptEndpoint
+          );
+          
+          if (hasTranscriptPanel) {
+            console.log('✓ Found transcript panel in fetched HTML');
+            const transcriptData = await getTranscriptFromPanel(ytData, targetLanguage);
+            if (transcriptData && transcriptData.length > 0) {
+              console.log(`✓ Got ${transcriptData.length} entries from HTML transcript panel`);
+              return transcriptData;
+            }
+          }
+        }
       } catch (error) {
         console.error('Failed to fetch page HTML:', error);
       }
       
+      // If all methods fail, throw error
       throw new TranscriptsDisabled(videoId);
       
     } catch (error) {
@@ -647,7 +902,6 @@
     }
   }
 
-  // Extract captions from video player
   function extractCaptionsFromPlayer() {
     return new Promise((resolve) => {
       const eventId = 'captionsExtract_' + Date.now() + '_' + Math.random();
@@ -681,7 +935,6 @@
   // PARSING FUNCTIONS
   // ============================================================================
 
-  // Parse XML transcript format
   function parseTranscriptXML(xmlText) {
     const matches = [...xmlText.matchAll(RE_XML_TRANSCRIPT)];
     return matches.map(match => ({
@@ -691,7 +944,6 @@
     }));
   }
 
-  // Parse JSON transcript format
   function parseTranscriptJSON(jsonText) {
     try {
       const data = JSON.parse(jsonText);
@@ -712,7 +964,6 @@
     }
   }
 
-  // Parse WebVTT format
   function parseTranscriptVTT(vttText) {
     const lines = vttText.split('\n');
     const entries = [];
@@ -768,20 +1019,20 @@
         return false;
       }
 
-      console.log('Fetching transcript for video:', videoId, 'language:', languageCode || 'auto');
+      console.log('Fetching transcript for video:', videoId, 'language:', languageCode || 'auto-detect');
 
       const result = await getTranscriptUrl(videoId, languageCode);
       
       if (Array.isArray(result)) {
         transcriptData = result;
-        console.log(`✓ Loaded transcript directly from panel, entries: ${transcriptData.length}`);
+        console.log(`✓ Loaded transcript, entries: ${transcriptData.length}`);
         displayTranscript(transcriptData);
         return true;
       }
       
       const transcriptUrl = result;
       if (!transcriptUrl) {
-        showError('No transcript available for this video.<br><br>💡 Make sure captions are available for this video.<br><br><strong>Try enabling subtitles manually and retry.</strong>');
+        showError('No transcript available for this video.<br><br>💡 Make sure captions are available.');
         return false;
       }
 
@@ -795,7 +1046,7 @@
       
       if (!data || data.length === 0) {
         console.error('Empty response from transcript URL');
-        showError('The transcript API returned empty data.<br><br>💡 <strong>Try these steps:</strong><br>1. Enable subtitles on the video player<br>2. Change subtitle language<br>3. Click "Retry Load Transcript"');
+        showError('The transcript API returned empty data.<br><br>💡 Try enabling subtitles and retry.');
         return false;
       }
       
@@ -842,14 +1093,14 @@
         }
       }
       
-      showError('Could not parse transcript data.<br><br>💡 <strong>Try:</strong><br>1. Enable subtitles manually<br>2. Change subtitle language<br>3. Click "Retry Load Transcript"');
+      showError('Could not parse transcript data.');
       return false;
     } catch (error) {
       console.error('Error fetching transcript:', error);
       if (error instanceof TranscriptError) {
-        showError(error.message + '<br><br>💡 Try enabling subtitles manually and retry.');
+        showError(error.message);
       } else {
-        showError('Failed to load transcript: ' + error.message + '<br><br>💡 Try enabling subtitles manually and retry.');
+        showError('Failed to load transcript: ' + error.message);
       }
       return false;
     }
@@ -859,23 +1110,24 @@
   // UI FUNCTIONS
   // ============================================================================
 
-  // Reset the panel when navigating to a new video
   function resetTranscriptPanel() {
     const panel = document.getElementById('yt-transcript-panel');
     if (!panel) return;
     
     console.log('Resetting transcript panel for new video');
     
-    // Stop video sync
     stopVideoSync();
     
-    // Clear data
     transcriptData = [];
     currentSearchTerm = '';
+    isPanelMinimized = false;
+    availableLanguages = [];
+    currentLanguageParams = null;
     
-    // Reset UI
     const button = document.getElementById('load-transcript-btn');
+    const refreshBtn = document.getElementById('refresh-transcript-btn');
     const searchContainer = document.getElementById('search-container');
+    const languageSelectorContainer = document.getElementById('language-selector-container');
     const container = document.getElementById('transcript-content');
     
     if (button) {
@@ -888,6 +1140,14 @@
         Load Transcript
       `;
     }
+
+    if (refreshBtn) {
+      refreshBtn.style.display = 'none';
+    }
+    
+    if (languageSelectorContainer) {
+      languageSelectorContainer.style.display = 'none';
+    }
     
     if (searchContainer) {
       searchContainer.style.display = 'none';
@@ -896,16 +1156,16 @@
     }
     
     if (container) {
+      container.style.display = 'block';
       container.innerHTML = `
         <div class="transcript-instructions">
           <p>📝 Click "Load Transcript" to fetch the video captions</p>
-          <p class="transcript-tip">💡 Tip: The transcript will auto-scroll as the video plays</p>
+          <p class="transcript-tip">💡 Tip: You can select different languages after loading</p>
         </div>
       `;
     }
   }
 
-  // Copy transcript to clipboard
   async function copyTranscriptToClipboard() {
     if (!transcriptData || transcriptData.length === 0) {
       return;
@@ -919,7 +1179,6 @@
       
       await navigator.clipboard.writeText(text);
       
-      // Show feedback
       const copyBtn = document.getElementById('copy-transcript-btn');
       if (copyBtn) {
         const originalHTML = copyBtn.innerHTML;
@@ -942,27 +1201,47 @@
     }
   }
 
-  // Inject the transcript panel
   async function injectTranscriptPanel() {
     if (document.getElementById('yt-transcript-panel')) {
       return;
     }
 
     try {
-      // Wait for the secondary element to exist
       const secondary = await waitForElement('#secondary.style-scope.ytd-watch-flexy', 5000);
       
       const panel = document.createElement('div');
       panel.id = 'yt-transcript-panel';
       panel.innerHTML = `
         <div class="transcript-header">
-          <h3>Video Transcript</h3>
+          <div class="transcript-header-top">
+            <h3>Video Transcript</h3>
+            <button id="minimize-panel-btn" class="minimize-panel-btn" title="Minimize transcript">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4 8l4 4 4-4H4z"/>
+              </svg>
+            </button>
+          </div>
           <button id="load-transcript-btn" class="load-transcript-btn">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
             </svg>
             Load Transcript
           </button>
+          <button id="refresh-transcript-btn" class="refresh-transcript-btn" style="display: none;" title="Refresh and reload transcript">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z"/>
+            </svg>
+            Refresh Transcript
+          </button>
+          <div class="language-selector-container" id="language-selector-container" style="display: none;">
+            <label for="language-selector" class="language-label">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 6px;">
+                <path d="M8 0a8 8 0 110 16A8 8 0 018 0zM4.5 7.5a.5.5 0 000 1h5.793l-2.147 2.146a.5.5 0 00.708.708l3-3a.5.5 0 000-.708l-3-3a.5.5 0 10-.708.708L10.293 7.5H4.5z"/>
+              </svg>
+              Language:
+            </label>
+            <select id="language-selector" class="language-selector"></select>
+          </div>
           <div class="search-container" id="search-container" style="display: none;">
             <input type="text" id="transcript-search" placeholder="Search transcript...">
             <div class="transcript-options">
@@ -973,15 +1252,13 @@
                 </svg>
                 Copy All
               </button>
-              <select id="subtitle-language" style="display: none; margin-top: 8px; padding: 6px; background: var(--yt-spec-badge-chip-background); color: var(--yt-spec-text-primary); border: 1px solid var(--yt-spec-10-percent-layer); border-radius: 4px; cursor: pointer;">
-              </select>
             </div>
           </div>
         </div>
         <div class="transcript-content" id="transcript-content">
           <div class="transcript-instructions">
             <p>📝 Click "Load Transcript" to fetch the video captions</p>
-            <p class="transcript-tip">💡 Tip: The transcript will auto-scroll as the video plays</p>
+            <p class="transcript-tip">💡 Tip: You can select different languages after loading</p>
           </div>
         </div>
       `;
@@ -989,16 +1266,11 @@
       secondary.insertBefore(panel, secondary.firstChild);
 
       document.getElementById('load-transcript-btn').addEventListener('click', handleLoadTranscript);
+      document.getElementById('refresh-transcript-btn').addEventListener('click', handleRefreshTranscript);
+      document.getElementById('minimize-panel-btn').addEventListener('click', togglePanelMinimize);
       document.getElementById('transcript-search').addEventListener('input', handleSearch);
       document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
-
-      const languageSelect = document.getElementById('subtitle-language');
-      languageSelect.addEventListener('change', (e) => {
-        const selectedLanguage = e.target.value;
-        if (selectedLanguage) {
-          handleLoadTranscript(selectedLanguage);
-        }
-      });
+      document.getElementById('language-selector').addEventListener('change', handleLanguageChange);
       
       console.log('✓ Transcript panel injected successfully');
     } catch (error) {
@@ -1006,10 +1278,14 @@
     }
   }
 
-  // Handle load transcript button
-  async function handleLoadTranscript(languageCode = null) {
+  async function handleLoadTranscript(event) {
+    // 🔧 FIX: Ignorar el evento del navegador, usar languageCode como null por defecto
+    const languageCode = (event && typeof event === 'string') ? event : null;
+    
     const button = document.getElementById('load-transcript-btn');
+    const refreshBtn = document.getElementById('refresh-transcript-btn');
     const searchContainer = document.getElementById('search-container');
+    const languageSelectorContainer = document.getElementById('language-selector-container');
     
     button.disabled = true;
     button.innerHTML = `
@@ -1022,12 +1298,19 @@
     
     const success = await fetchTranscript(languageCode);
     
-    // Only hide button and show search if successful
     if (success) {
       button.style.display = 'none';
+      if (refreshBtn) refreshBtn.style.display = 'block';
       searchContainer.style.display = 'block';
+      
+      // 🆕 Mostrar selector de idiomas si hay múltiples idiomas
+      if (availableLanguages.length > 1) {
+        populateLanguageSelector();
+        if (languageSelectorContainer) {
+          languageSelectorContainer.style.display = 'flex';
+        }
+      }
     } else {
-      // Re-enable button for retry
       button.disabled = false;
       button.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -1038,7 +1321,74 @@
     }
   }
 
-  // Display transcript in panel
+  // 🆕 NUEVO: Manejar el botón de refresh
+  async function handleRefreshTranscript(event) {
+    // 🔧 FIX: Ignorar el evento del navegador
+    const refreshBtn = document.getElementById('refresh-transcript-btn');
+    const searchContainer = document.getElementById('search-container');
+    const languageSelectorContainer = document.getElementById('language-selector-container');
+    const container = document.getElementById('transcript-content');
+    
+    if (!refreshBtn) return;
+    
+    refreshBtn.disabled = true;
+    const originalHTML = refreshBtn.innerHTML;
+    refreshBtn.innerHTML = `
+      <svg class="spinning" width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 108 8A8 8 0 008 0zm0 14a6 6 0 110-12 6 6 0 010 12V0z" opacity="0.3"/>
+        <path d="M8 0a8 8 0 000 16V14a6 6 0 010-12V0z"/>
+      </svg>
+      Refreshing...
+    `;
+    
+    // Limpiar datos actuales
+    stopVideoSync();
+    transcriptData = [];
+    currentSearchTerm = '';
+    availableLanguages = [];
+    currentLanguageParams = null;
+    
+    if (container) {
+      container.innerHTML = `
+        <div class="loading">
+          <p>🔄 Refreshing transcript...</p>
+          <p class="transcript-tip">Detecting active subtitle language...</p>
+        </div>
+      `;
+    }
+    
+    // Buscar input de búsqueda y limpiar
+    const searchInput = document.getElementById('transcript-search');
+    if (searchInput) searchInput.value = '';
+    
+    // Recargar transcripción (auto-detectará el idioma activo)
+    const success = await fetchTranscript(null); // Pasar null explícitamente
+    
+    refreshBtn.disabled = false;
+    refreshBtn.innerHTML = originalHTML;
+    
+    if (success) {
+      // Mostrar selector de idiomas si hay múltiples idiomas
+      if (availableLanguages.length > 1) {
+        populateLanguageSelector();
+        if (languageSelectorContainer) {
+          languageSelectorContainer.style.display = 'flex';
+        }
+      }
+    } else {
+      // Si falla, mostrar el botón de carga nuevamente
+      const loadBtn = document.getElementById('load-transcript-btn');
+      if (loadBtn) {
+        loadBtn.style.display = 'block';
+        refreshBtn.style.display = 'none';
+        searchContainer.style.display = 'none';
+        if (languageSelectorContainer) {
+          languageSelectorContainer.style.display = 'none';
+        }
+      }
+    }
+  }
+
   function displayTranscript(data) {
     const container = document.getElementById('transcript-content');
     if (!container) return;
@@ -1060,7 +1410,6 @@
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
         
-        // Pause auto-scroll temporarily when user clicks
         isUserScrolling = true;
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
@@ -1071,11 +1420,9 @@
       });
     });
 
-    // Start video sync after displaying transcript
     startVideoSync();
   }
 
-  // Handle search input
   function handleSearch(e) {
     const searchTerm = e.target.value.toLowerCase().trim();
     currentSearchTerm = searchTerm;
@@ -1092,7 +1439,7 @@
     if (filtered.length === 0) {
       const container = document.getElementById('transcript-content');
       container.innerHTML = '<div class="no-results">No results found</div>';
-      stopVideoSync(); // Stop sync when no results
+      stopVideoSync();
       return;
     }
 
@@ -1116,7 +1463,6 @@
         const startTime = parseFloat(entry.dataset.start);
         seekToTime(startTime);
         
-        // Pause auto-scroll temporarily when user clicks
         isUserScrolling = true;
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
@@ -1127,25 +1473,30 @@
       });
     });
 
-    // Restart video sync with filtered results
     startVideoSync();
   }
 
-  // Show error message
   function showError(message) {
     const container = document.getElementById('transcript-content');
     if (container) {
-      container.innerHTML = `<div class="error">${message}</div>`;
+      container.innerHTML = `
+        <div class="error">
+          ${message}
+          <br><br>
+          <strong>💡 Troubleshooting tips:</strong><br>
+          1. Check if the video has captions available<br>
+          2. Try opening YouTube's native transcript panel (click ⋯ → Show transcript)<br>
+          3. Enable subtitles manually and click "Retry"<br>
+          4. Some videos may have transcripts disabled by the uploader
+        </div>
+      `;
     }
-    
-    // Don't reset button here - let handleLoadTranscript manage it
   }
 
   // ============================================================================
   // NAVIGATION DETECTION
   // ============================================================================
 
-  // Watch for navigation changes (YouTube SPA)
   function watchForNavigation() {
     let lastUrl = location.href;
     
@@ -1164,14 +1515,12 @@
       }
     };
     
-    // Use MutationObserver to detect DOM changes (YouTube's SPA navigation)
     const observer = new MutationObserver(checkUrlChange);
     observer.observe(document.body, {
       childList: true,
       subtree: true
     });
     
-    // Also check on popstate (browser back/forward)
     window.addEventListener('popstate', checkUrlChange);
     
     return observer;
@@ -1185,11 +1534,10 @@
     if (window.location.href.includes('/watch')) {
       injectFetchHandler();
       await injectTranscriptPanel();
-      resetTranscriptPanel(); // Reset panel when navigating to new video
+      resetTranscriptPanel();
     }
   }
 
-  // Run on load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       init();
