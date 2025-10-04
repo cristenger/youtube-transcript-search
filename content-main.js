@@ -7,6 +7,8 @@
   // Global state
   let observerInstance = null;
   let lastUrl = location.href;
+  let lastVideoId = TranscriptUtils.getVideoId();
+  let navigationTimeoutId = null; // Track navigation timeout to prevent memory leaks
 
   // ============================================================================
   // EVENT HANDLERS
@@ -192,42 +194,72 @@
    * Watch for navigation changes (video changes)
    */
   function watchForNavigation() {
-    // Observe URL changes
-    const observer = new MutationObserver(() => {
+    // Check for URL/video changes
+    const checkUrlChange = () => {
       const currentUrl = location.href;
+      const currentVideoId = TranscriptUtils.getVideoId();
       
-      if (currentUrl !== lastUrl) {
-        const wasWatchPage = /youtube\.com\/watch\?v=/.test(lastUrl);
-        const isWatchPage = /youtube\.com\/watch\?v=/.test(currentUrl);
+      // Ignore temporary null videoId during YouTube navigation
+      if (!currentVideoId && currentUrl.includes('/watch')) {
+        // YouTube is transitioning, wait for actual video ID
+        return;
+      }
+      
+      // Detect change in video, not just URL
+      if (currentUrl !== lastUrl || currentVideoId !== lastVideoId) {
+        // Only log if we have a valid video ID (avoid "null → null" logs)
+        if (currentVideoId || lastVideoId) {
+          console.log('🔄 Video changed:', lastVideoId, '→', currentVideoId);
+        }
         
-        console.log('🔄 URL changed:', {
-          from: lastUrl,
-          to: currentUrl,
-          wasWatchPage,
-          isWatchPage
-        });
-        
+        const previousVideoId = lastVideoId;
         lastUrl = currentUrl;
+        lastVideoId = currentVideoId;
         
-        if (isWatchPage) {
-          if (wasWatchPage) {
-            // Changed between videos
-            console.log('📺 Video changed - resetting panel');
-            VideoSync.stopVideoSync();
-            TranscriptUI.resetTranscriptPanel();
-          } else {
-            // Navigated to watch page
-            console.log('📺 Navigated to watch page - initializing');
-            init();
+        // Check if we're on a watch page with valid video ID
+        if (currentUrl.includes('/watch') && currentVideoId) {
+          // Clear any pending navigation timeout
+          if (navigationTimeoutId) {
+            clearTimeout(navigationTimeoutId);
+            navigationTimeoutId = null;
           }
-        } else if (wasWatchPage) {
-          // Left watch page
-          console.log('🚪 Left watch page - cleaning up');
+          
+          // Clear data immediately to prevent showing stale data
           VideoSync.stopVideoSync();
+          TranscriptUI.clearTranscriptData();
+          TranscriptExtraction.resetLanguageCache();
+          
+          // Also clear the UI immediately
+          const container = document.getElementById('transcript-content');
+          if (container) {
+            container.innerHTML = '<div class="transcript-instructions"><p>⏳ Loading new video...</p></div>';
+          }
+          
+          // Give YouTube MORE time to load the new video and update ytInitialData
+          // YouTube's SPA navigation can take a while to update the page data
+          navigationTimeoutId = setTimeout(() => {
+            navigationTimeoutId = null; // Clear reference
+            
+            // Verify we're still on the same video (no another navigation happened)
+            const currentCheckVideoId = TranscriptUtils.getVideoId();
+            
+            if (currentCheckVideoId !== currentVideoId) {
+              return; // Video changed again, skip reset
+            }
+            
+            const panel = document.getElementById('yt-transcript-panel');
+            if (panel) {
+              TranscriptUI.resetTranscriptPanel();
+            } else {
+              init();
+            }
+          }, 2000);
         }
       }
-    });
+    };
     
+    // Observe DOM changes (for SPA navigation)
+    const observer = new MutationObserver(checkUrlChange);
     observer.observe(document.body, {
       childList: true,
       subtree: true
@@ -235,23 +267,41 @@
     
     observerInstance = observer;
     
-    // Also listen to YouTube's navigation events
-    window.addEventListener('yt-navigate-finish', () => {
-      const currentUrl = location.href;
-      if (currentUrl !== lastUrl) {
-        console.log('🔄 YouTube navigation event detected');
-        lastUrl = currentUrl;
-        
-        const isWatchPage = /youtube\.com\/watch\?v=/.test(currentUrl);
-        if (isWatchPage) {
-          console.log('📺 Video changed via yt-navigate - resetting panel');
-          VideoSync.stopVideoSync();
-          TranscriptUI.resetTranscriptPanel();
-        }
-      }
-    });
+    // Listen to YouTube's native navigation events
+    window.addEventListener('yt-navigate-finish', checkUrlChange);
+    window.addEventListener('yt-page-data-updated', checkUrlChange);
+    window.addEventListener('popstate', checkUrlChange);
+  }
+
+  // ============================================================================
+  // CLEANUP
+  // ============================================================================
+
+  /**
+   * Cleanup function to prevent memory leaks
+   */
+  function cleanup() {
+    console.log('🧹 Cleaning up extension resources...');
     
-    console.log('✓ Navigation watcher started');
+    // Disconnect MutationObserver
+    if (observerInstance) {
+      observerInstance.disconnect();
+      observerInstance = null;
+    }
+    
+    // Clear any pending navigation timeout
+    if (navigationTimeoutId) {
+      clearTimeout(navigationTimeoutId);
+      navigationTimeoutId = null;
+    }
+    
+    // Stop video sync
+    VideoSync.stopVideoSync();
+    
+    // Clear transcript data
+    TranscriptUI.clearTranscriptData();
+    
+    console.log('✓ Cleanup complete');
   }
 
   // ============================================================================
@@ -302,6 +352,9 @@
   } else {
     init();
   }
+
+  // Cleanup when extension is disabled or page unloads
+  window.addEventListener('beforeunload', cleanup);
 
   console.log('✓ YouTube Transcript Search extension loaded');
 })();

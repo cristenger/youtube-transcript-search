@@ -168,8 +168,6 @@ const VideoSync = (function() {
         }, 5000);
       }, { passive: true });
     }
-
-    console.log('✓ Video sync started');
   }
 
   /**
@@ -184,7 +182,9 @@ const VideoSync = (function() {
 
     const container = document.getElementById('transcript-content');
     if (container) {
+      // Remove all event listeners that were added
       container.removeEventListener('scroll', handleUserScroll);
+      // Note: We can't remove anonymous functions, but cloning in resetTranscriptPanel handles this
     }
 
     currentActiveIndex = -1;

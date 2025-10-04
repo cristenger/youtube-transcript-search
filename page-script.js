@@ -98,20 +98,19 @@
       
       console.log('Found', textTracks.length, 'text tracks');
       
-      // Find an active or English track
+      // Find an active track first, or use first available
       let activeTrack = null;
       for (let i = 0; i < textTracks.length; i++) {
         const track = textTracks[i];
         console.log('Track', i, ':', track.kind, track.label, track.language, track.mode);
         
         if (track.kind === 'subtitles' || track.kind === 'captions') {
+          // Priority 1: Currently showing track
           if (track.mode === 'showing') {
             activeTrack = track;
             break;
           }
-          if (!activeTrack && (track.language === 'en' || track.language.startsWith('en'))) {
-            activeTrack = track;
-          }
+          // Priority 2: First available track (respects YouTube's default order)
           if (!activeTrack) {
             activeTrack = track;
           }

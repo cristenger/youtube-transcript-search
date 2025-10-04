@@ -33,6 +33,14 @@ const TranscriptUI = (function() {
   }
 
   /**
+   * Clear transcript data
+   */
+  function clearTranscriptData() {
+    transcriptData = [];
+    currentSearchTerm = '';
+  }
+
+  /**
    * Set available languages
    * @param {Array} languages - Array of language objects
    */
@@ -54,8 +62,6 @@ const TranscriptUI = (function() {
   function resetTranscriptPanel() {
     const panel = document.getElementById('yt-transcript-panel');
     if (!panel) return;
-    
-    console.log('Resetting transcript panel for new video');
     
     // Stop video sync
     VideoSync.stopVideoSync();
@@ -143,8 +149,6 @@ const TranscriptUI = (function() {
       const newContainer = container.cloneNode(true);
       container.parentNode.replaceChild(newContainer, container);
     }
-    
-    console.log('✓ Panel reset complete');
   }
 
   /**
@@ -216,7 +220,6 @@ const TranscriptUI = (function() {
     });
     
     languageSelectorContainer.style.display = 'flex';
-    console.log(`✓ Language selector populated with ${availableLanguages.length} languages`);
   }
 
   /**
@@ -460,7 +463,6 @@ const TranscriptUI = (function() {
       document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
       document.getElementById('language-selector').addEventListener('change', eventHandlers.onLanguageChange);
       
-      console.log('✓ Transcript panel injected successfully');
     } catch (error) {
       console.error('❌ Failed to inject transcript panel:', error);
     }
@@ -493,6 +495,7 @@ const TranscriptUI = (function() {
   return {
     setTranscriptData,
     getTranscriptData,
+    clearTranscriptData,
     setAvailableLanguages,
     setEventHandlers,
     resetTranscriptPanel,
