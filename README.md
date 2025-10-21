@@ -1,98 +1,83 @@
-# YouTube Transcript Search - Chrome Extension
+# YouTube Transcript Search - Extensión para Chrome
 
-A Chrome extension that displays YouTube video transcripts in a sidebar with search functionality and clickable timestamps.
+Una extensión de Chrome que muestra las transcripciones de videos de YouTube de forma permanente en la barra lateral, con búsqueda y posibilidad de copiar el texto completo.
 
-## Features
+## ¿Qué hace esta extensión?
 
-- 📝 **Transcript Display**: Shows the full video transcript alongside the video
-- 🔍 **Search Functionality**: Search for specific words or phrases within the transcript
-- ⏱️ **Clickable Timestamps**: Jump to any point in the video by clicking on timestamps
-- 🎨 **YouTube-matching UI**: Seamlessly integrates with YouTube's design (supports both light and dark modes)
-- 🔄 **Auto-detection**: Automatically loads transcripts when you navigate to a YouTube video
+Esta extensión hace prácticamente lo mismo que la herramienta de transcripción nativa de YouTube, **pero con dos grandes diferencias:**
 
-## Installation
+1. **Siempre está visible**: La transcripción se queda visible en la barra lateral mientras ves el video, no tienes que abrir y cerrar el panel constantemente.
 
-1. **Download the extension files** to a local folder
-2. **Open Chrome** and navigate to `chrome://extensions/`
-3. **Enable Developer Mode** (toggle in the top right corner)
-4. Click **"Load unpacked"**
-5. Select the folder containing the extension files
-6. The extension is now installed!
+2. **Puedes copiar el texto**: Incluye un botón "Copy All" que copia toda la transcripción al portapapeles con un solo clic.
 
-## Usage
+## Características adicionales
 
-1. Navigate to any YouTube video (e.g., `https://www.youtube.com/watch?v=VIDEO_ID`)
-2. The transcript panel will automatically appear in the sidebar (where the live chat or recommended videos are shown)
-3. **Search**: Type in the search box to filter transcript entries
-4. **Navigate**: Click on any timestamp to jump to that moment in the video
-5. Search results are highlighted in yellow for easy identification
+- 🔍 **Búsqueda en tiempo real**: Busca palabras o frases dentro de la transcripción
+- ⏱️ **Timestamps clickeables**: Haz clic en cualquier línea para saltar a ese momento del video
+- 🌓 **Se adapta al tema**: Funciona en modo claro y oscuro de YouTube
+- 🌐 **Múltiples idiomas**: Si el video tiene subtítulos en varios idiomas, puedes cambiar entre ellos
 
-## Files Structure
+## Cómo instalar la extensión en Chrome
 
-```
-youtube-transcript-search/
-├── manifest.json       # Extension configuration
-├── content.js          # Main logic for transcript fetching and UI
-├── styles.css          # Styling for the transcript panel
-├── icons/              # Extension icons (16x16, 48x48, 128x128)
-└── README.md          # This file
-```
+### Paso 1: Descargar los archivos
 
-## How It Works
+Descarga esta carpeta completa a tu computadora (puedes descargar el ZIP desde GitHub y descomprimirlo).
 
-1. **Content Script Injection**: The extension injects a content script into YouTube watch pages
-2. **Transcript Fetching**: Extracts caption track URLs from YouTube's player data
-3. **XML Parsing**: Parses the transcript XML data with timestamps
-4. **UI Rendering**: Creates a searchable, clickable transcript panel
-5. **Video Control**: Uses the native HTML5 video element to seek to timestamps
+### Paso 2: Abrir las extensiones de Chrome
 
-## Notes
+1. Abre **Google Chrome**
+2. En la barra de direcciones, escribe: `chrome://extensions/`
+3. Presiona **Enter**
 
-- The extension requires videos to have captions/transcripts available
-- Auto-generated captions are supported
-- English captions are preferred, but other languages work too
-- The extension respects YouTube's theme (light/dark mode)
+### Paso 3: Activar el modo desarrollador
 
-## Creating Icons
+En la esquina superior derecha de la página, verás un interruptor que dice **"Modo de desarrollador"** (Developer mode).
 
-The extension needs three icon sizes. You can create simple icons using any image editor:
+Actívalo (debe ponerse en azul).
 
-- `icons/icon16.png` - 16x16 pixels
-- `icons/icon48.png` - 48x48 pixels
-- `icons/icon128.png` - 128x128 pixels
+### Paso 4: Cargar la extensión
 
-For now, you can use placeholder icons or create your own with tools like:
-- [Favicon.io](https://favicon.io/)
-- [Canva](https://www.canva.com/)
-- Any image editor (GIMP, Photoshop, etc.)
+1. Haz clic en el botón **"Cargar extensión sin empaquetar"** (Load unpacked)
+2. Busca y selecciona la carpeta donde descargaste los archivos de la extensión
+3. Haz clic en **"Seleccionar carpeta"**
 
-## Troubleshooting
+¡Listo! La extensión ya está instalada.
 
-**"No transcript available for this video"**
-- The video doesn't have captions enabled
-- Captions might not be accessible via the API
+## Cómo usar la extensión
 
-**Panel not showing up**
-- Refresh the page
-- Make sure you're on a YouTube watch page (`/watch?v=...`)
-- Check that the extension is enabled in `chrome://extensions/`
+1. **Ve a cualquier video de YouTube** (por ejemplo: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`)
 
-**Search not working**
-- Make sure the transcript has loaded successfully
-- Try clearing the search box and typing again
+2. **La extensión se carga automáticamente** - Verás un panel nuevo en la barra lateral que dice "Video Transcript"
 
-## Privacy
+3. **Haz clic en "Load Transcript"** - Esto cargará las transcripciones del video
 
-This extension:
-- Does NOT collect any user data
-- Does NOT send data to external servers
-- Only accesses YouTube pages with your permission
-- Fetches transcripts directly from YouTube's public API
+4. **Ya está!** Ahora puedes:
+   - Ver toda la transcripción mientras ves el video
+   - Buscar palabras en el cuadro de búsqueda
+   - Hacer clic en cualquier línea para saltar a ese momento
+   - Copiar toda la transcripción con el botón "Copy All"
 
-## License
+## Preguntas frecuentes
 
-MIT License - Feel free to modify and distribute
+**¿Funciona con todos los videos?**
+No, solo funciona con videos que tienen subtítulos o transcripciones activadas (igual que la herramienta nativa de YouTube).
 
-## Contributing
+**¿Funciona con subtítulos auto-generados?**
+Sí, funciona con subtítulos auto-generados por YouTube.
 
-Contributions are welcome! Feel free to submit issues or pull requests.
+**¿La extensión no aparece?**
+Recarga la página del video (F5). Si aún no aparece, verifica que la extensión esté activada en `chrome://extensions/`.
+
+**¿Esta extensión recopila mis datos?**
+No. La extensión solo funciona en tu navegador y no envía ninguna información a servidores externos.
+
+## Privacidad
+
+- ❌ NO recopila datos de usuario
+- ❌ NO envía información a servidores externos
+- ✅ Solo accede a las páginas de YouTube
+- ✅ Las transcripciones se obtienen directamente de YouTube
+
+## Licencia
+
+MIT License - Libre para usar y modificar
