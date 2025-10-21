@@ -341,10 +341,6 @@ const TranscriptUI = (function() {
     if (container) {
       container.innerHTML = `
         <div class="loading">
-       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-  <path d="M8 3V1.21c0-.45-.54-.67-.85-.35l-2 2a.5.5 0 0 0 0 .71l2 2c.31.31.85.09.85-.36V3.5A4.5 4.5 0 1 1 3.5 8H2a6 6 0 1 0 6-5z"/>
-  <path d="M8 13v1.79c0 .45.54.67.85.35l2-2a.5.5 0 0 0 0-.71l-2-2c-.31-.31-.85-.09-.85.36V13z"/>
-</svg>
           <p>${message}</p>
         </div>
       `;
