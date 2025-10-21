@@ -341,9 +341,6 @@ const TranscriptUI = (function() {
     if (container) {
       container.innerHTML = `
         <div class="loading">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="spinning">
-            <path d="M12 2a10 10 0 1010 10h-2a8 8 0 11-8-8V2z"/>
-          </svg>
           <p>${message}</p>
         </div>
       `;
@@ -389,83 +386,113 @@ const TranscriptUI = (function() {
   }
 
   /**
-   * Inject transcript panel into page
+   * Inject transcript panel into page with retry logic
+   * @param {number} maxRetries - Maximum number of retry attempts
+   * @param {number} retryDelay - Delay between retries in milliseconds
    */
-  async function injectTranscriptPanel() {
+  async function injectTranscriptPanel(maxRetries = 2, retryDelay = 1500) {
     if (document.getElementById('yt-transcript-panel')) {
+      console.log('✓ Transcript panel already exists');
       return;
     }
 
-    try {
-      const secondary = await TranscriptUtils.waitForElement('#secondary.style-scope.ytd-watch-flexy', 5000);
-      
-      const panel = document.createElement('div');
-      panel.id = 'yt-transcript-panel';
-      panel.innerHTML = `
-        <div class="transcript-header">
-          <div class="transcript-header-top">
-            <h3>Video Transcript</h3>
-            <button id="minimize-panel-btn" class="minimize-panel-btn" title="Minimize transcript">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M4 8l4 4 4-4H4z"/>
-              </svg>
-            </button>
-          </div>
-          <button id="load-transcript-btn" class="load-transcript-btn">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
-            </svg>
-            Load Transcript
-          </button>
-          <button id="refresh-transcript-btn" class="refresh-transcript-btn" style="display: none;" title="Refresh and reload transcript">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z"/>
-            </svg>
-            Refresh Transcript
-          </button>
-          <div class="language-selector-container" id="language-selector-container" style="display: none;">
-            <label for="language-selector" class="language-label">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 6px;">
-                <path d="M8 0a8 8 0 110 16A8 8 0 018 0zM4.5 7.5a.5.5 0 000 1h5.793l-2.147 2.146a.5.5 0 00.708.708l3-3a.5.5 0 000-.708l-3-3a.5.5 0 10-.708.708L10.293 7.5H4.5z"/>
-              </svg>
-              Language:
-            </label>
-            <select id="language-selector" class="language-selector"></select>
-          </div>
-          <div class="search-container" id="search-container" style="display: none;">
-            <input type="text" id="transcript-search" placeholder="Search transcript...">
-            <div class="transcript-options">
-              <button id="copy-transcript-btn" class="copy-transcript-btn">
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`🔄 Retry attempt ${attempt}/${maxRetries} to inject transcript panel...`);
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        } else {
+          console.log('🎯 Attempting to inject transcript panel...');
+        }
+
+        // Increase timeout for better reliability (8 seconds)
+        const secondary = await TranscriptUtils.waitForElement('#secondary.style-scope.ytd-watch-flexy', 8000);
+
+        console.log('✓ Found #secondary element, injecting panel...');
+
+        const panel = document.createElement('div');
+        panel.id = 'yt-transcript-panel';
+        panel.innerHTML = `
+          <div class="transcript-header">
+            <div class="transcript-header-top">
+              <h3>Video Transcript</h3>
+              <button id="minimize-panel-btn" class="minimize-panel-btn" title="Minimize transcript">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2zm0 1a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V4a1 1 0 00-1-1H4z"/>
-                  <path d="M11 7h3v7a2 2 0 01-2 2H5v-1h7a1 1 0 001-1V7z" opacity="0.6"/>
+                  <path d="M4 8l4 4 4-4H4z"/>
                 </svg>
-                Copy All
               </button>
             </div>
+            <button id="load-transcript-btn" class="load-transcript-btn">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2.5v3h3v1h-4v-4h1z"/>
+              </svg>
+              Load Transcript
+            </button>
+            <button id="refresh-transcript-btn" class="refresh-transcript-btn" style="display: none;" title="Refresh and reload transcript">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z"/>
+              </svg>
+              Refresh Transcript
+            </button>
+            <div class="language-selector-container" id="language-selector-container" style="display: none;">
+              <label for="language-selector" class="language-label">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 6px;">
+                  <path d="M8 0a8 8 0 110 16A8 8 0 018 0zM4.5 7.5a.5.5 0 000 1h5.793l-2.147 2.146a.5.5 0 00.708.708l3-3a.5.5 0 000-.708l-3-3a.5.5 0 10-.708.708L10.293 7.5H4.5z"/>
+                </svg>
+                Language:
+              </label>
+              <select id="language-selector" class="language-selector"></select>
+            </div>
+            <div class="search-container" id="search-container" style="display: none;">
+              <input type="text" id="transcript-search" placeholder="Search transcript...">
+              <div class="transcript-options">
+                <button id="copy-transcript-btn" class="copy-transcript-btn">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M4 2h8a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2zm0 1a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V4a1 1 0 00-1-1H4z"/>
+                    <path d="M11 7h3v7a2 2 0 01-2 2H5v-1h7a1 1 0 001-1V7z" opacity="0.6"/>
+                  </svg>
+                  Copy All
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="transcript-content" id="transcript-content">
-          <div class="transcript-instructions">
-            <p>📝 Click "Load Transcript" to fetch the video captions</p>
-            <p class="transcript-tip">💡 Tip: You can select different languages after loading</p>
+          <div class="transcript-content" id="transcript-content">
+            <div class="transcript-instructions">
+              <p>📝 Click "Load Transcript" to fetch the video captions</p>
+              <p class="transcript-tip">💡 Tip: You can select different languages after loading</p>
+            </div>
           </div>
-        </div>
-      `;
+        `;
 
-      secondary.insertBefore(panel, secondary.firstChild);
+        secondary.insertBefore(panel, secondary.firstChild);
 
-      // Attach event listeners
-      document.getElementById('load-transcript-btn').addEventListener('click', eventHandlers.onLoadTranscript);
-      document.getElementById('refresh-transcript-btn').addEventListener('click', eventHandlers.onRefreshTranscript);
-      document.getElementById('minimize-panel-btn').addEventListener('click', togglePanelMinimize);
-      document.getElementById('transcript-search').addEventListener('input', handleSearch);
-      document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
-      document.getElementById('language-selector').addEventListener('change', eventHandlers.onLanguageChange);
-      
-    } catch (error) {
-      console.error('❌ Failed to inject transcript panel:', error);
+        // Attach event listeners
+        document.getElementById('load-transcript-btn').addEventListener('click', eventHandlers.onLoadTranscript);
+        document.getElementById('refresh-transcript-btn').addEventListener('click', eventHandlers.onRefreshTranscript);
+        document.getElementById('minimize-panel-btn').addEventListener('click', togglePanelMinimize);
+        document.getElementById('transcript-search').addEventListener('input', handleSearch);
+        document.getElementById('copy-transcript-btn').addEventListener('click', copyTranscriptToClipboard);
+        document.getElementById('language-selector').addEventListener('change', eventHandlers.onLanguageChange);
+
+        console.log('✓ Transcript panel injected successfully');
+        return; // Success - exit function
+
+      } catch (error) {
+        lastError = error;
+        console.warn(`⚠️ Attempt ${attempt + 1}/${maxRetries + 1} failed:`, error.message);
+
+        // If this was the last attempt, log final error
+        if (attempt === maxRetries) {
+          console.error('❌ Failed to inject transcript panel after', maxRetries + 1, 'attempts:', error);
+        }
+      }
     }
+
+    // If we got here, all retries failed
+    console.error('❌ Could not inject transcript panel. YouTube sidebar may not have loaded yet.');
   }
 
   /**
